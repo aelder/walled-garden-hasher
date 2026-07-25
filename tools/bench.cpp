@@ -141,7 +141,7 @@ static bool verify(const Template &tpl, int lanes)
 int main(int argc, char **argv)
 {
 	int lanes = -1, threads = 1;
-	size_t pad = 0;
+	size_t pad = 64;
 	double seconds = 8.0;
 	bool sweep_lanes = false, sweep_pad = false;
 

@@ -32,23 +32,6 @@ alignas(16) inline constexpr uint32_t kHarakaRC[40][4] = {
 	{0x48a659cf, 0xc173bc0f, 0xba7ed22b, 0xa0c1613c}, {0xe9c59da1, 0x4ad6bdfd, 0x02288288, 0x756acc03},
 };
 
-// §5 key absorption for clhash case 4 (three AES2+MIX2 groups over the
-// fixed constants). MIX2 is a pure word permutation, so it commutes with
-// the trailing key XOR: MIX2(u ^ k) = MIX2(u) ^ MIX2(k). Pre-permuting the
-// deferred keys lets each group's XOR ride the next group's AESE instead of
-// costing an instruction of its own.
-//
-//   kCase4Absorb[g][0..1] = MIX2(rc[4g+2], rc[4g+3])
-alignas(16) inline constexpr uint32_t kCase4Absorb[3][2][4] = {
-	{{0x9f029114, 0xfd5b4f79, 0xcf029d60, 0xbbf3bcaf}, {0x53f28498, 0x2e7b4f08, 0x3402de2d, 0x0ed6eae6}},
-	{{0xda4fef1b, 0x1fc70b3b, 0xe2412761, 0x675ffde2}, {0x5e2e7cd0, 0xafcacc07, 0x67c28f43, 0x2924d9b0}},
-	{{0x8df69800, 0x5c9d2d8a, 0x69028b2e, 0x4aaa9ec8}, {0x941723bf, 0xde6f5572, 0xb2cc0bb9, 0xfa0478a6}},
-};
-
-// The final group's two deferred keys never reach a following AESE; they
-// fold straight into `acc ^= temp1 ^ temp2` as a single constant.
-alignas(16) inline constexpr uint32_t kCase4Tail[4] = {0x19e1bbbf, 0x82f278f8, 0xdbce8097, 0xb0aee66e};
-
 // Same absorption for Haraka256's five AES2+MIX2 groups (key expansion).
 //   kHaraka256Absorb[g][0..1] = MIX2(rc[4g+2], rc[4g+3])
 alignas(16) inline constexpr uint32_t kHaraka256Absorb[5][2][4] = {

@@ -6,6 +6,7 @@ namespace vh22 {
 namespace ref {
 
 bool g_reduction_index_overflow = false;
+uint64_t g_trace_selector[32];
 
 // --- little helpers -------------------------------------------------------
 
@@ -278,6 +279,7 @@ static inline u128 CL(u128 v) { return clmul_lo_hi(v, v); }
 static void step(u128 *key, const u128 *pbuf_copy, u128 &acc, uint32_t *touched, int i)
 {
 	const uint64_t selector = low64(acc);
+	g_trace_selector[i] = selector;
 	const uint32_t prand_idx = (uint32_t)((selector >> 5) & 511);
 	const uint32_t prandex_idx = (uint32_t)((selector >> 32) & 511);
 	u128 *prand = key + prand_idx;
@@ -366,14 +368,20 @@ static void step(u128 *key, const u128 *pbuf_copy, u128 &acc, uint32_t *touched,
 		break;
 	}
 	case 4: {
+		// The upstream body opens with `const __m128i *rc = prand;`, which
+		// shadows the global Haraka round-constant table. Its AES2 macros
+		// therefore read key material, not the fixed constants -- the same
+		// convention case 5 uses. Getting this wrong is invisible to a
+		// self-consistent reference; only the cross-check catches it.
+		const u128 *rc = prand;
 		u128 temp1 = *pbuf_alt;
 		u128 temp2 = *pbuf;
 		for (int g = 0; g < 3; ++g) {
 			const int rci = 4 * g;
-			temp1 = aesenc(temp1, haraka_rc[rci + 0]);
-			temp2 = aesenc(temp2, haraka_rc[rci + 1]);
-			temp1 = aesenc(temp1, haraka_rc[rci + 2]);
-			temp2 = aesenc(temp2, haraka_rc[rci + 3]);
+			temp1 = aesenc(temp1, rc[rci + 0]);
+			temp2 = aesenc(temp2, rc[rci + 1]);
+			temp1 = aesenc(temp1, rc[rci + 2]);
+			temp2 = aesenc(temp2, rc[rci + 3]);
 			const u128 t = unpacklo32(temp1, temp2);
 			temp2 = unpackhi32(temp1, temp2);
 			temp1 = t;

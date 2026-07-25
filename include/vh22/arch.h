@@ -172,9 +172,40 @@ VH_INLINE v128 vtbl16(v128 table, v128 idx) { return vqtbl1q_u8(table, idx); }
 // a separate EOR every single round.
 //
 // Keep AESE and AESMC adjacent with matching operands or Firestorm will not
-// fuse them into the 3-cycle, 4/cycle pair.
-VH_INLINE v128 aes_begin(v128 s) { return vaesmcq_u8(vaeseq_u8(s, vzero())); }
-VH_INLINE v128 aes_round(v128 s, v128 k) { return vaesmcq_u8(vaeseq_u8(s, k)); }
+// fuse them into the 3-cycle, 4/cycle pair. clang mostly cooperates, but under
+// register pressure it will hoist a round-key load between the two -- see
+// tools/audit-disas.py, which counts exactly this.
+//
+// Pinning the pair together also stops clang scheduling across the block, so
+// it is not an obvious win. Measured on M5 at 64 lanes, 1 thread, interleaved
+// runs: 4419 kH/s pinned against 4370 kH/s free, +1.1%, consistent in
+// direction across five paired comparisons at 8 s, 10 s and 30 s. It also
+// takes the broken-pair count in the finalisation Haraka from 5 to 0.
+//
+// Build with -DVH22_AES_ASM=0 to hand the scheduling back to clang.
+#ifndef VH22_AES_ASM
+#define VH22_AES_ASM 1
+#endif
+
+VH_INLINE v128 aes_begin(v128 s)
+{
+#if VH22_AES_ASM
+	__asm__("aese %0.16b, %1.16b\n\taesmc %0.16b, %0.16b" : "+w"(s) : "w"(vzero()));
+	return s;
+#else
+	return vaesmcq_u8(vaeseq_u8(s, vzero()));
+#endif
+}
+
+VH_INLINE v128 aes_round(v128 s, v128 k)
+{
+#if VH22_AES_ASM
+	__asm__("aese %0.16b, %1.16b\n\taesmc %0.16b, %0.16b" : "+w"(s) : "w"(k));
+	return s;
+#else
+	return vaesmcq_u8(vaeseq_u8(s, k));
+#endif
+}
 
 // Two chained x86 AESENCs with keys ka then kb: 2 AESE + 2 AESMC + 1 EOR,
 // against sse2neon's 2 AESE + 2 AESMC + 2 EOR, and with the pairing guaranteed.

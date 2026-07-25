@@ -26,6 +26,11 @@ u128 clmul_lo_hi(u128 a, u128 b);
 // x86 _mm_mulhrs_epi16: per lane, (a*b + 2^14) >> 15, truncated to 16 bits
 u128 mulhrs(u128 a, u128 b);
 
+// Per-step selector trace from the most recent clhash() call. The case a step
+// took is (selector >> 2) & 7, so this pins down which body two
+// implementations first disagree about.
+extern uint64_t g_trace_selector[32];
+
 // Latches if the modulo-reduction shuffle ever sees an index above 15 -- the
 // bound the optimised path relies on to drop sse2neon's defensive AND (§9).
 extern bool g_reduction_index_overflow;

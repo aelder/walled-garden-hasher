@@ -41,10 +41,18 @@ bool hash_meets_target(const uint32_t hash[8], const uint32_t target[8]);
 // A mining context. Owns `lanes` mutable key copies plus one pristine copy.
 class Hasher {
 public:
-	// stride_pad shifts consecutive lane keys apart by extra bytes (§8): with
-	// regions exactly 8832 apart their cache-set footprints overlap heavily.
-	// Must be a multiple of 64. Zero reproduces the naive layout.
-	explicit Hasher(int lanes, size_t stride_pad = 0);
+	// stride_pad shifts consecutive lane keys apart by extra bytes (§8).
+	//
+	// The notes expect this to matter a lot, reasoning from regions exactly
+	// 8192 B apart, whose bases then differ only in high address bits. That is
+	// not this allocation: VERUSKEYSIZE is 8832 = 138 cache lines, not a power
+	// of two, so consecutive lane bases already walk through the sets. The
+	// residual is small and real -- measured on M5 at 64 lanes, 1 thread,
+	// interleaved 20 s runs: 4430 kH/s at 64 B against 4397 kH/s at 0, +0.75%,
+	// with everything from 384 B up clearly worse (512 B costs 1.6%).
+	//
+	// Must be a multiple of 64; it is rounded down if not.
+	explicit Hasher(int lanes, size_t stride_pad = 64);
 	~Hasher();
 	Hasher(const Hasher &) = delete;
 	Hasher &operator=(const Hasher &) = delete;

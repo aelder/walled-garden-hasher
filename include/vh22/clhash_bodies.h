@@ -129,33 +129,30 @@ VH_INLINE void case3(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 	}
 }
 
-// Three AES2 + MIX2 groups over the fixed Haraka constants. MIX2 is a word
-// permutation and therefore linear, so each group's trailing key XOR is
-// pre-permuted at build time and absorbed into the next group's AESE; the
-// last pair collapses into the accumulator fold. Twelve x86 AESENCs that
-// sse2neon would spend 12 EORs on cost exactly one here.
+// Three AES2 + MIX2 groups. The round keys are prand[0..11] -- key material,
+// not the fixed Haraka constants: the upstream body opens with
+// `const __m128i *rc = prand;`, which shadows the global table. That rules out
+// the compile-time key absorption the fixed-constant chains get, so each fused
+// pair still ends in one real EOR. Six pairs, six EORs, against the twelve a
+// translated build spends.
 template <bool Exact>
 VH_INLINE void case4(v128 &acc, uint64_t selector, const StepConst &k, v128 *prand,
                      v128 *prandex)
 {
 	const int b = base_of(selector);
+	const v128 *rc = prand;
 	v128 t1 = k.pbuf[b ^ 1];
 	v128 t2 = k.pbuf[b];
 
-	t1 = aes_round(aes_begin(t1), rc_const(0));
-	t2 = aes_round(aes_begin(t2), rc_const(1));
-	for (int g = 1; g < 3; ++g) {
+	for (int g = 0; g < 3; ++g) {
+		const v128 *r = rc + 4 * g;
+		t1 = aes2_fused(t1, r[0], r[2]);
+		t2 = aes2_fused(t2, r[1], r[3]);
 		const v128 m1 = vzip1_32(t1, t2);
-		const v128 m2 = vzip2_32(t1, t2);
-		const v128 a1 = vreinterpretq_u8_u32(vld1q_u32(kCase4Absorb[g - 1][0]));
-		const v128 a2 = vreinterpretq_u8_u32(vld1q_u32(kCase4Absorb[g - 1][1]));
-		t1 = aes_round(aes_round(m1, a1), rc_const(4 * g + 0));
-		t2 = aes_round(aes_round(m2, a2), rc_const(4 * g + 1));
+		t2 = vzip2_32(t1, t2);
+		t1 = m1;
 	}
-	const v128 m1 = vzip1_32(t1, t2);
-	const v128 m2 = vzip2_32(t1, t2);
-	const v128 tail = vreinterpretq_u8_u32(vld1q_u32(kCase4Tail));
-	acc = vxor(vxor(m1, m2), vxor(tail, acc));
+	acc = vxor(t2, vxor(t1, acc));
 
 	const v128 tempa1 = vload(prand);
 	const v128 tempa2 = mhrs<Exact>(acc, tempa1);
