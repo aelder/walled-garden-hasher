@@ -182,6 +182,20 @@ private:
 	std::vector<Worker> workers_;
 };
 
+// --- share accounting -----------------------------------------------------
+//
+// Populated by the stratum client. accepted/rejected come from the
+// mining.submit response, stale from the pool rejecting a share whose job has
+// moved on, difficulty from mining.set_target. None of it is observable
+// locally, which is why it is all still zero.
+struct ShareStats {
+	bool connected = false;
+	uint64_t accepted = 0, rejected = 0, stale = 0;
+	double difficulty = 0;
+	double last_share_s = -1;   // seconds since; negative means never
+	double connected_since = 0;
+};
+
 // --- pool configuration ---------------------------------------------------
 
 struct Pool {
@@ -278,6 +292,7 @@ struct App {
 	uint64_t last_hashes = 0;
 	double last_t = 0;
 
+	ShareStats share;
 	std::vector<Pool> pools;
 	int pool_sel = 0, pool_cursor = 0, field = 0;
 	Pool draft;
@@ -396,14 +411,18 @@ struct App {
 		// the same plotting language as the hashrate graph, which solid bars
 		// were not. Colour ramps within the cluster's family so P and E stay
 		// distinguishable while magnitude reads off the ramp.
-		const int rows = h - 4;
+		const int rows = h - 6;          // pad, cores, pad, two control rows
 		const int cols = 2;
 		const int per = (sys.ncpu + cols - 1) / cols;
-		const int cw = (w - 4) / cols;
+		const int top_pad = (rows > per) ? (rows - per) / 2 : 0;
+		const int cw = (w - 6) / cols;
 		const int mw = cw - 10;
 		for (int i = 0; i < sys.ncpu; ++i) {
-			const int cx = x + 2 + (i / per) * cw;
-			const int cy = y + 1 + (i % per);
+			// Centre the block between the title and the controls, so the
+			// slack on a machine with few cores reads as symmetric padding
+			// rather than a gap above the controls.
+			const int cx = x + 3 + (i / per) * cw;
+			const int cy = y + 2 + top_pad + (i % per);
 			if (i % per >= rows)
 				continue;
 			// Performance cores are listed first even though Apple numbers
@@ -424,16 +443,16 @@ struct App {
 			frame.text(cx + 4 + (mw > 2 ? mw : 0), cy, pc, lerp(pal::kDim, hi, 0.4 + u * 0.6));
 		}
 
-		const int half = (w - 4) / 2;
-		int cy = y + h - 3;
-		draw_spin(x + 2, cy, half, "threads", std::to_string(threads), focus == F_THREADS);
-		draw_spin(x + 2 + half, cy, half, "lanes", std::to_string(lanes),
+		const int half = (w - 6) / 2;
+		int cy = y + h - 3;              // leaves a blank row above the footer
+		draw_spin(x + 3, cy, half, "threads", std::to_string(threads), focus == F_THREADS);
+		draw_spin(x + 3 + half, cy, half, "lanes", std::to_string(lanes),
 		          focus == F_LANES);
 		++cy;
 		const bool on = engine.active();
-		draw_button(x + 2, cy, w - 4, on ? "Stop" : "Start benchmark", focus == F_RUN,
+		draw_button(x + 3, cy, w - 6, on ? "Stop" : "Start benchmark", focus == F_RUN,
 		            on ? pal::kRed : pal::kGreen);
-		frame.text(x + w - 26, cy, "no core pinning on macOS", pal::kDim);
+		frame.text(x + w - 27, cy, "no core pinning on macOS", pal::kDim);
 	}
 
 	void draw_spin(int x, int y, int w, const std::string &label, const std::string &val,
@@ -456,25 +475,74 @@ struct App {
 		frame.text(x, y, s, foc ? col : pal::kLabel, pal::kPanel, foc);
 	}
 
+	// A dash reads as "no value yet" without pretending the field is absent.
+	static std::string dash(bool have, const std::string &v) { return have ? v : "—"; }
+
+	void stat(int x, int y, const std::string &k, const std::string &v, Rgb col)
+	{
+		frame.text(x, y, k, pal::kLabel);
+		frame.text(x + 12, y, v, col);
+	}
+
 	void draw_pool_panel(int x, int y, int w, int h)
 	{
 		const bool foc = (screen == Screen::Dashboard) && focus == F_POOLS;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
-		int ty = y + 1;
+		const int c = x + 3;
+		const int btn = y + h - 2;          // the button owns this row
+		int ty = y + 2;                     // blank row under the title
+		// Every row is guarded: this panel shares its height with the cores
+		// panel beside it, so on a short terminal the lower blocks drop
+		// rather than overprinting the button.
+		auto room = [&](int need) { return ty + need <= btn - 1; };
+
 		if (pools.empty()) {
-			frame.text(x + 2, ty++, "no pools configured", pal::kDim);
-			ty++;
+			if (room(1)) frame.text(c, ty++, "no pool configured", pal::kDim);
+			if (room(2)) { ++ty; frame.text(c, ty++, "press ⏎ to add one", pal::kDim); }
 		} else {
 			const Pool &p = pools[(size_t)pool_sel];
-			frame.text(x + 2, ty++, "● " + p.label, pal::kPurple, pal::kPanel, true);
-			frame.text(x + 4, ty++, p.host + ":" + p.port, pal::kInk);
-			frame.text(x + 4, ty++, p.user.empty() ? "(no worker set)" : p.user,
-			           pal::kLabel);
-			ty++;
+			if (room(1))
+				frame.text(c, ty++, "● " + (p.label.empty() ? "(unnamed)" : p.label),
+				           pal::kPurple, pal::kPanel, true);
+			if (room(1))
+				frame.text(c + 2, ty++,
+				           p.host.empty() ? "(no host)" : p.host + ":" + p.port,
+				           pal::kInk);
+			if (room(1))
+				frame.text(c + 2, ty++, p.user.empty() ? "(no worker)" : p.user,
+				           pal::kLabel);
 		}
-		frame.text(x + 2, ty++, "stratum client not built yet —", pal::kDim);
-		frame.text(x + 2, ty++, "mining runs in benchmark mode.", pal::kDim);
-		draw_button(x + 2, y + h - 2, w - 4, "Edit pools…", foc, pal::kPurple);
+
+		const bool on = share.connected;
+		if (room(3)) {
+			++ty;
+			stat(c, ty++, "status", on ? "● connected" : "○ not connected",
+			     on ? pal::kGreen : pal::kDim);
+			stat(c, ty++, "difficulty",
+			     on ? std::to_string((long)share.difficulty) : "—",
+			     on ? pal::kInk : pal::kDim);
+		}
+
+		const int col2 = c + (w - 6) / 2;
+		if (room(3)) {
+			++ty;
+			stat(c, ty, "accepted", on ? std::to_string(share.accepted) : "—",
+			     on ? pal::kGreen : pal::kDim);
+			stat(col2, ty++, "stale", on ? std::to_string(share.stale) : "—",
+			     on ? pal::kYellow : pal::kDim);
+			stat(c, ty, "rejected", on ? std::to_string(share.rejected) : "—",
+			     on ? pal::kRed : pal::kDim);
+			char age[32] = "—";
+			if (share.last_share_s >= 0)
+				snprintf(age, sizeof(age), "%.0fs ago", share.last_share_s);
+			stat(col2, ty++, "last", age, on ? pal::kInk : pal::kDim);
+		}
+
+		if (!on && room(2)) {
+			++ty;
+			frame.text(c, ty++, "share stats need the stratum client", pal::kDim);
+		}
+		draw_button(c, btn, w - 6, "Edit pools…", foc, pal::kPurple);
 	}
 
 	void draw_dashboard()
@@ -484,10 +552,18 @@ struct App {
 		const int hh = (H >= 32) ? 9 : (H >= 26 ? 7 : 4);
 		draw_header(0, y, W, hh);
 		y += hh;
-		int bot = (sys.ncpu + 1) / 2 + 4;   // two cores per row, plus controls
-		const int bot_max = (H - y) / 2;
+		// Side by side, so both panels take the taller requirement: cores need
+		// pad + rows + pad + spinners + button + pad; the pool panel needs
+		// identity, status, the share grid and its note.
+		const int cores_need = (sys.ncpu + 1) / 2 + 7;
+		const int pool_need = 15;
+		int bot = cores_need > pool_need ? cores_need : pool_need;
+		// Reserve a readable graph rather than splitting the remainder evenly:
+		// the bottom panels have a fixed content budget, the graph just wants
+		// whatever is left.
+		const int bot_max = (H - y) - 9;
 		if (bot > bot_max) bot = bot_max;
-		if (bot < 7) bot = 7;
+		if (bot < 10) bot = 10;
 		const int gh = H - y - bot - 1;
 		draw_graph(0, y, W, gh > 5 ? gh : 5);
 		y += (gh > 5 ? gh : 5);
