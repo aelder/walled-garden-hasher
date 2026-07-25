@@ -85,6 +85,8 @@ struct SysInfo {
 struct CoreLoad {
 	std::vector<uint64_t> prev_busy, prev_total;
 	std::vector<double> pct;
+	std::vector<std::vector<double>> hist;   // one trace per core
+	static constexpr size_t kHist = 96;
 
 	void sample(int ncpu)
 	{
@@ -109,6 +111,12 @@ struct CoreLoad {
 			pct[i] = dt ? (double)db / (double)dt : 0.0;
 			prev_busy[i] = busy;
 			prev_total[i] = total;
+			if (hist.size() <= i)
+				hist.resize(i + 1);
+			if (hist[i].empty())
+				hist[i].assign(kHist, 0.0);
+			hist[i].erase(hist[i].begin());
+			hist[i].push_back(pct[i]);
 		}
 		vm_deallocate(mach_task_self(), (vm_address_t)info, cnt * sizeof(int));
 	}
@@ -384,14 +392,15 @@ struct App {
 		                 (focus == F_THREADS || focus == F_LANES || focus == F_RUN);
 		window(frame, x, y, w, h, "Cores", foc, pal::kBlue);
 
-		// One column reads better, so use it when the cores fit. They often
-		// will not on a laptop-sized terminal, and a silently truncated core
-		// list would be worse than a denser one.
-		const int rows = h - 5;
-		const int cols = (sys.ncpu <= rows) ? 1 : 2;
+		// Two cores per line, each a braille trace of its own recent load --
+		// the same plotting language as the hashrate graph, which solid bars
+		// were not. Colour ramps within the cluster's family so P and E stay
+		// distinguishable while magnitude reads off the ramp.
+		const int rows = h - 4;
+		const int cols = 2;
 		const int per = (sys.ncpu + cols - 1) / cols;
 		const int cw = (w - 4) / cols;
-		const int mw = cw - 11;
+		const int mw = cw - 10;
 		for (int i = 0; i < sys.ncpu; ++i) {
 			const int cx = x + 2 + (i / per) * cw;
 			const int cy = y + 1 + (i % per);
@@ -405,23 +414,26 @@ struct App {
 			char lbl[16];
 			snprintf(lbl, sizeof(lbl), "%s%d", p ? "P" : "E", p ? i : i - sys.nperf);
 			const double u = (cpu < (int)load.pct.size()) ? load.pct[cpu] : 0.0;
-			const Rgb col = p ? pal::kGreen : pal::kBlue;
-			frame.text(cx, cy, lbl, pal::kInk);
-			if (mw > 2)
-				meter(frame, cx + 3, cy, mw, u, col);
+			const Rgb hi = p ? pal::kGreen : pal::kBlue;
+			const Rgb lo = lerp(pal::kDim, hi, 0.25);
+			frame.text(cx, cy, lbl, p ? pal::kInk : pal::kLabel);
+			if (mw > 2 && cpu < (int)load.hist.size())
+				braille_spark(frame, cx + 3, cy, mw, 1, load.hist[cpu], lo, hi);
 			char pc[8];
 			snprintf(pc, sizeof(pc), "%3d%%", (int)(u * 100));
-			frame.text(cx + 4 + (mw > 2 ? mw : 0), cy, pc, pal::kLabel);
+			frame.text(cx + 4 + (mw > 2 ? mw : 0), cy, pc, lerp(pal::kDim, hi, 0.4 + u * 0.6));
 		}
 
-		int cy = y + h - 5;
-		frame.text(x + 2, cy++, "macOS schedules freely — no core pinning", pal::kDim);
-		draw_spin(x + 2, cy++, w - 4, "threads", std::to_string(threads),
-		          focus == F_THREADS);
-		draw_spin(x + 2, cy++, w - 4, "lanes", std::to_string(lanes), focus == F_LANES);
+		const int half = (w - 4) / 2;
+		int cy = y + h - 3;
+		draw_spin(x + 2, cy, half, "threads", std::to_string(threads), focus == F_THREADS);
+		draw_spin(x + 2 + half, cy, half, "lanes", std::to_string(lanes),
+		          focus == F_LANES);
+		++cy;
 		const bool on = engine.active();
 		draw_button(x + 2, cy, w - 4, on ? "Stop" : "Start benchmark", focus == F_RUN,
 		            on ? pal::kRed : pal::kGreen);
+		frame.text(x + w - 26, cy, "no core pinning on macOS", pal::kDim);
 	}
 
 	void draw_spin(int x, int y, int w, const std::string &label, const std::string &val,
@@ -430,13 +442,17 @@ struct App {
 		const Rgb fg = foc ? pal::kInk : pal::kLabel;
 		frame.text(x, y, label, fg, pal::kPanel, foc);
 		const std::string v = "◀ " + val + " ▶";
-		frame.text(x + w - (int)v.size() - 8, y, v, foc ? pal::kYellow : pal::kDim,
-		           pal::kPanel, foc);
+		int vx = x + w - disp_len(v) - 2;
+		const int after_label = x + disp_len(label) + 1;
+		if (vx < after_label)
+			vx = after_label;
+		frame.text(vx, y, v, foc ? pal::kYellow : pal::kDim, pal::kPanel, foc);
 	}
 
 	void draw_button(int x, int y, int w, const std::string &label, bool foc, Rgb col)
 	{
 		const std::string s = (foc ? "▸ " : "  ") + label;
+		(void)w;
 		frame.text(x, y, s, foc ? col : pal::kLabel, pal::kPanel, foc);
 	}
 
@@ -468,10 +484,10 @@ struct App {
 		const int hh = (H >= 32) ? 9 : (H >= 26 ? 7 : 4);
 		draw_header(0, y, W, hh);
 		y += hh;
-		int bot = sys.ncpu + 5;          // one row per core plus controls
+		int bot = (sys.ncpu + 1) / 2 + 4;   // two cores per row, plus controls
 		const int bot_max = (H - y) / 2;
-		if (bot > bot_max) bot = bot_max;   // two columns will absorb the rest
-		if (bot < 9) bot = 9;
+		if (bot > bot_max) bot = bot_max;
+		if (bot < 7) bot = 7;
 		const int gh = H - y - bot - 1;
 		draw_graph(0, y, W, gh > 5 ? gh : 5);
 		y += (gh > 5 ? gh : 5);

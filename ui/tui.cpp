@@ -144,7 +144,7 @@ void window(Frame &f, int x, int y, int w, int h, const std::string &title, bool
 	if (focused)
 		f.text(x + 2, y, "▢", pal::kInk);
 	const std::string t = " " + title + " ";
-	int tx = x + (w - (int)t.size()) / 2;
+	int tx = x + (w - disp_len(t)) / 2;
 	if (tx < x + 5)
 		tx = x + 5;
 	f.text(tx, y, t, focused ? pal::kInk : pal::kLabel, pal::kPanel, focused);
@@ -218,6 +218,69 @@ void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double
 			f.put(x + cx, y + cy, g, col);
 		}
 	}
+}
+
+int disp_len(const std::string &s)
+{
+	int n = 0;
+	for (size_t i = 0; i < s.size();) {
+		const unsigned char b = (unsigned char)s[i];
+		size_t len = 1;
+		if ((b & 0xE0) == 0xC0) len = 2;
+		else if ((b & 0xF0) == 0xE0) len = 3;
+		else if ((b & 0xF8) == 0xF0) len = 4;
+		i += len;
+		++n;
+	}
+	return n;
+}
+
+Rgb lerp(Rgb a, Rgb b, double t)
+{
+	if (t < 0) t = 0;
+	if (t > 1) t = 1;
+	return Rgb{(uint8_t)(a.r + (b.r - a.r) * t), (uint8_t)(a.g + (b.g - a.g) * t),
+	           (uint8_t)(a.b + (b.b - a.b) * t)};
+}
+
+void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
+                   Rgb lo, Rgb hi)
+{
+	if (w <= 0 || h <= 0)
+		return;
+	const int dots_w = w * 2, dots_h = h * 4;
+	std::vector<uint8_t> mask((size_t)w * (size_t)h, 0);
+	std::vector<double> colval((size_t)w, 0.0);
+
+	const int n = (int)series.size();
+	for (int dx = 0; dx < dots_w; ++dx) {
+		const int idx = n - dots_w + dx;
+		if (idx < 0 || idx >= n)
+			continue;
+		double v = series[(size_t)idx];
+		if (v < 0) v = 0;
+		if (v > 1) v = 1;
+		const int cx = dx / 2;
+		if (v > colval[(size_t)cx])
+			colval[(size_t)cx] = v;
+		int filled = (int)(v * dots_h + 0.5);
+		if (filled <= 0 && v > 0.01)
+			filled = 1;
+		for (int k = 0; k < filled; ++k) {
+			const int dy = dots_h - 1 - k;
+			mask[(size_t)(dy / 4) * (size_t)w + (size_t)cx] |= kDot[dx % 2][dy % 4];
+		}
+	}
+
+	for (int cy = 0; cy < h; ++cy)
+		for (int cx = 0; cx < w; ++cx) {
+			const uint8_t m = mask[(size_t)cy * (size_t)w + (size_t)cx];
+			if (!m)
+				continue;
+			char g[5];
+			encode_braille(m, g);
+			f.put(x + cx, y + cy, g, lerp(lo, hi, colval[(size_t)cx]));
+		}
 }
 
 void meter(Frame &f, int x, int y, int w, double frac, Rgb full, Rgb empty)

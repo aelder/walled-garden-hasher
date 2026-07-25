@@ -102,6 +102,19 @@ void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double
 // Horizontal meter. `frac` in [0,1].
 void meter(Frame &f, int x, int y, int w, double frac, Rgb full, Rgb empty = pal::kBar);
 
+Rgb lerp(Rgb a, Rgb b, double t);
+
+// Columns a string occupies. Layout maths must never use size(): every glyph
+// in this UI that matters -- arrows, braille, box drawing -- is multibyte.
+int disp_len(const std::string &s);
+
+// A compact braille history trace, for one core per row. Same plotting
+// density as braille_plot, but coloured per column by that column's own value
+// rather than by height -- at one row tall there is only one height band, so
+// the colour has to carry the magnitude instead of the geometry.
+void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
+                   Rgb lo, Rgb hi);
+
 // --- terminal -------------------------------------------------------------
 
 enum class Key {
