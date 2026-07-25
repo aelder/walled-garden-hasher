@@ -294,8 +294,7 @@ void Client::handle_line(const std::string &line)
 			j.valid = have_target_;
 			job_ = j;
 		}
-		if (state_.load() == State::Authorizing || state_.load() == State::Subscribing)
-			set_state(State::Ready, "mining");
+		set_state(State::Ready, "mining");
 		return;
 	}
 
@@ -318,8 +317,13 @@ void Client::handle_line(const std::string &line)
 		return;
 	}
 
-	if (method == "client.show_message" || method == "client.reconnect")
+	if (method == "client.show_message")
 		return;
+	if (method == "client.reconnect") {
+		// The pool is telling us to go away and come back.
+		reconnect_requested_ = true;
+		return;
+	}
 
 	// Otherwise a response to one of ours.
 	if (v["id"].type == json::Type::Number) {
@@ -376,19 +380,65 @@ void Client::handle_line(const std::string &line)
 
 void Client::run(Config cfg)
 {
+	// A miner has to survive the pool going away: pools restart, drop idle
+	// connections and hand out client.reconnect. Backoff doubles from one
+	// second to thirty, and resets whenever a session actually reached Ready
+	// so a stable pool that blips does not inherit a long delay.
+	int backoff = 1;
+	while (run_.load()) {
+		const bool reached_ready = session(cfg);
+		if (!run_.load())
+			break;
+
+		if (reached_ready) {
+			backoff = 1;
+			stats_.reconnects.fetch_add(1);
+		}
+		char note[96];
+		snprintf(note, sizeof(note), "reconnecting in %ds", backoff);
+		set_state(State::Disconnected, note);
+
+		for (int i = 0; i < backoff * 10 && run_.load(); ++i)
+			usleep(100000);
+		backoff = backoff < 30 ? backoff * 2 : 30;
+	}
+	set_state(State::Disconnected, "");
+}
+
+bool Client::session(const Config &cfg)
+{
+	bool reached_ready = false;
+
+	// Nothing survives a reconnect: the pool issues a new extranonce, so the
+	// old job and target are not just stale but wrong to mine.
+	{
+		std::lock_guard<std::mutex> g(mu_);
+		job_ = Job();
+		have_target_ = false;
+		xnonce1_.clear();
+		// Shares we sent but never heard back about are unknowable now.
+		stats_.stale.fetch_add(pending_.size());
+		pending_.clear();
+		outbox_.clear();
+	}
+
 	set_state(State::Resolving, "resolving " + cfg.host);
 	if (!dial(cfg))
-		return;
+		return false;
 	set_state(State::Subscribing, "subscribing");
 	stats_.connected_since.store(now_wall());
 
 	if (!send_line("{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"vh22/1.0\"]}")) {
 		set_state(State::Failed, "subscribe failed");
-		return;
+		close(fd_);
+		fd_ = -1;
+		return false;
 	}
 
 	std::string carry;
-	while (run_.load()) {
+	while (run_.load() && !reconnect_requested_) {
+		if (state_.load() == State::Ready)
+			reached_ready = true;
 		struct pollfd p = {fd_, POLLIN, 0};
 		const int rc = ::poll(&p, 1, 200);
 		if (rc < 0 && errno != EINTR)
@@ -443,8 +493,12 @@ void Client::run(Config cfg)
 		}
 	}
 
-	if (state_.load() != State::Failed)
-		set_state(State::Disconnected, "disconnected");
+	if (fd_ >= 0) {
+		close(fd_);
+		fd_ = -1;
+	}
+	reconnect_requested_ = false;
+	return reached_ready;
 }
 
 } // namespace stratum

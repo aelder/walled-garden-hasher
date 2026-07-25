@@ -58,6 +58,13 @@ Two words have to travel back with a share exactly where the miner had them,
 or the pool re-derives a different hash: the counting nonce at header word 30
 and the per-worker tag at word 32.
 
+The client reconnects on its own: backoff doubles from one second to thirty
+and resets whenever a session actually reached Ready, so a stable pool that
+blips does not inherit a long delay. Nothing survives a reconnect -- the pool
+issues a new extranonce, so the previous job and target are not merely stale
+but wrong to mine, and shares sent but never answered are counted stale
+because their fate is unknowable. `client.reconnect` is honoured.
+
 `make stratum-test` runs the client against `tools/mock_pool.py`, a mock pool
 that **validates** what the miner sends rather than accepting it -- submit
 parameter count, nonce length against the extranonce it issued, the fd4005

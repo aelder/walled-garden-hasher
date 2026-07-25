@@ -22,7 +22,7 @@ ENGINE_OBJ = $(ENGINE_SRC:%.cpp=$(BUILD)/%.o)
 REF_OBJ    = $(REF_SRC:%.cpp=$(BUILD)/%.o)
 
 BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench $(BUILD)/vh22-sieve-oracle \
-           $(BUILD)/vh22-top
+           $(BUILD)/vh22-top $(BUILD)/vh22-stratum-test
 
 .PHONY: all clean test bench disas crosscheck top stratum-test
 all: $(BINARIES)

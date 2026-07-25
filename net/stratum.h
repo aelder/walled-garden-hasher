@@ -49,6 +49,7 @@ struct Stats {
 	std::atomic<double> difficulty{0};
 	std::atomic<double> last_share_time{0};   // wall clock, 0 = never
 	std::atomic<double> connected_since{0};
+	std::atomic<uint64_t> reconnects{0};
 };
 
 enum class State { Disconnected, Resolving, Connecting, Subscribing, Authorizing, Ready, Failed };
@@ -80,7 +81,8 @@ public:
 	void submit(uint64_t job_serial, uint32_t nonce, uint32_t tag);
 
 private:
-	void run(Config cfg);
+	void run(Config cfg);            // retry loop
+	bool session(const Config &cfg); // one connection; true if it reached Ready
 	bool dial(const Config &cfg);
 	bool send_line(const std::string &s);
 	bool pump_lines(std::string &carry);
@@ -98,6 +100,7 @@ private:
 	std::string session_;
 	uint8_t target_be_[32] = {0};
 	bool have_target_ = false;
+	bool reconnect_requested_ = false;
 
 	struct Pending {
 		uint64_t id;
