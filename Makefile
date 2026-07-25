@@ -41,8 +41,15 @@ $(BUILD)/vh22-bench: $(BUILD)/tools/bench.o $(ENGINE_OBJ)
 UPSTREAM_DIR ?= ../verus
 UPSTREAM_FLAGS = -O2 -mcpu=$(MCPU) -DARM -I$(UPSTREAM_DIR) -w
 
+# The upstream sources include sse2neon, which is a submodule and is therefore
+# absent from a fresh clone. `make test` does not need it; say so plainly here
+# rather than failing on a missing header three levels down.
 $(BUILD)/upstream/verus_clhash.o: $(UPSTREAM_DIR)/verus_clhash.cpp
 	@mkdir -p $(dir $@)
+	@test -f $(UPSTREAM_DIR)/sse2neon/sse2neon.h || { \
+	  echo "crosscheck needs the sse2neon submodule:"; \
+	  echo "    git submodule update --init verus/sse2neon"; \
+	  exit 1; }
 	$(CXX) $(UPSTREAM_FLAGS) -std=c++17 -c $< -o $@
 
 # haraka.c is a C translation unit upstream; compiling it as C++ would mangle

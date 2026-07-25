@@ -7,9 +7,17 @@ references below (§N) are to that document.
 
 ```
 make test        # differential harness against ref/ (written from the spec)
-make crosscheck  # end-to-end diff against the deployed sse2neon build
 make bench       # throughput
+make crosscheck  # end-to-end diff against the deployed sse2neon build
 python3 tools/audit-disas.py build/src/*.o   # §10 codegen checks
+```
+
+`make test` and `make bench` are self-contained. `make crosscheck` builds the
+upstream sources in `../verus`, which include sse2neon as a submodule, so a
+fresh clone needs it once:
+
+```
+git submodule update --init verus/sse2neon
 ```
 
 ## Layout
