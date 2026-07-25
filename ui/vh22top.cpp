@@ -289,24 +289,46 @@ struct Pool {
 	std::string label;
 	std::string host;
 	std::string port = "3956";
+	// True while the row still matches what this build ships. Corrections to
+	// an endpoint then reach existing installs on next launch, which matters
+	// because pools move and the seeds here started out as guesses. Editing a
+	// row clears it and the user's value wins permanently.
+	bool builtin = false;
 };
 
-// Seeds for the pool list, written out on first run and editable thereafter,
-// so a wrong value here is corrected once and stays corrected.
-//
-// Only LuckPool is confirmed: na.luckpool.net:3956 is what this repo has
-// actually mined against. The rest carry 3956 because that is the conventional
-// VerusHash stratum port, not because their endpoint has been verified -- the
-// UI shows host:port on every row precisely so a wrong one is visible rather
-// than mysterious.
+// Seeds for the pool list. Ports are not uniform across these -- LuckPool is
+// on the conventional VerusHash 3956, Vipor on 5040, and both Verus.farm and
+// Verus.io on 9999 -- which is exactly why every row shows host:port in the
+// UI rather than hiding it.
 static const Pool kPresets[] = {
-	{"LuckPool NA", "na.luckpool.net", "3956"},
-	{"LuckPool EU", "eu.luckpool.net", "3956"},
-	{"LuckPool AP", "ap.luckpool.net", "3956"},
-	{"Vipor", "na.vipor.net", "3956"},
-	{"Verus.farm", "pool.verus.farm", "3956"},
-	{"Verus.io", "pool.verus.io", "3956"},
+	{"LuckPool NA", "na.luckpool.net", "3956", true},
+	{"LuckPool EU", "eu.luckpool.net", "3956", true},
+	{"LuckPool AP", "ap.luckpool.net", "3956", true},
+	{"Vipor US West", "usw.vipor.net", "5040", true},
+	{"Verus.farm", "verus.farm", "9999", true},
+	{"Verus.io", "pool.verus.io", "9999", true},
 };
+
+// Presets that have been renamed, so a row written by an older build still
+// matches its successor and picks up the corrected endpoint.
+static const struct {
+	const char *from;
+	const char *to;
+} kRenames[] = {
+	{"Vipor", "Vipor US West"},
+};
+
+// The shipped row with this label, if any, following renames.
+static const Pool *preset_for(std::string label)
+{
+	for (const auto &r : kRenames)
+		if (label == r.from)
+			label = r.to;
+	for (const auto &p : kPresets)
+		if (p.label == label)
+			return &p;
+	return nullptr;
+}
 
 static std::string config_dir()
 {
@@ -326,6 +348,7 @@ static bool load_settings(Settings &out)
 	FILE *f = fopen(config_path().c_str(), "r");
 	if (!f)
 		return false;
+	bool seen_builtin_key = false;
 	char line[512];
 	while (fgets(line, sizeof(line), f)) {
 		std::string s(line);
@@ -341,8 +364,30 @@ static bool load_settings(Settings &out)
 		else if (k == "pool") { out.pools.push_back(Pool()); out.pools.back().label = v; }
 		else if (!out.pools.empty() && k == "host") out.pools.back().host = v;
 		else if (!out.pools.empty() && k == "port") out.pools.back().port = v;
+		else if (!out.pools.empty() && k == "builtin") {
+			out.pools.back().builtin = (v == "1");
+			seen_builtin_key = true;
+		}
+		else if (!out.pools.empty() && k == "edited")
+			out.pools.back().builtin = false;
 	}
 	fclose(f);
+
+	// A row written before this key existed is treated as shipped if its
+	// label is one of ours, so endpoint corrections land on next launch.
+	// Anything the user edited carries builtin=0 and is left alone.
+	for (auto &p : out.pools) {
+		if (!p.builtin && preset_for(p.label) == nullptr)
+			continue;
+		if (const Pool *seed = preset_for(p.label)) {
+			if (p.builtin || !seen_builtin_key) {
+				p.label = seed->label;   // carry renames through
+				p.host = seed->host;
+				p.port = seed->port;
+				p.builtin = true;
+			}
+		}
+	}
 	if (out.selected >= (int)out.pools.size())
 		out.selected = 0;
 	return true;
@@ -358,8 +403,8 @@ static bool save_settings(const Settings &st)
 	fprintf(f, "address=%s\nrig=%s\nselected=%d\n\n", st.id.address.c_str(),
 	        st.id.rig.c_str(), st.selected);
 	for (const auto &p : st.pools)
-		fprintf(f, "pool=%s\nhost=%s\nport=%s\n", p.label.c_str(), p.host.c_str(),
-		        p.port.c_str());
+		fprintf(f, "pool=%s\nhost=%s\nport=%s\nbuiltin=%d\n", p.label.c_str(),
+		        p.host.c_str(), p.port.c_str(), p.builtin ? 1 : 0);
 	fclose(f);
 	chmod(config_path().c_str(), 0600);  // it names the wallet being mined to
 	return true;
@@ -1095,6 +1140,7 @@ struct App {
 			case Key::Down:
 			case Key::Tab: field = (field + 1) % 3; break;
 			case Key::Enter:
+				draft.builtin = false;   // the user's value wins from here
 				if (pool_cursor >= (int)cfg.pools.size())
 					cfg.pools.push_back(draft);
 				else
