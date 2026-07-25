@@ -599,7 +599,8 @@ struct App {
 		// the same plotting language as the hashrate graph, which solid bars
 		// were not. Colour ramps within the cluster's family so P and E stay
 		// distinguishable while magnitude reads off the ramp.
-		const int rows = h - 6;
+		// pad + cores + gap + (control, gap, control, gap, control) + pad
+		const int rows = h - 10;
 		const int cols = 2;
 		const int per = (sys.ncpu + cols - 1) / cols;
 		const int top_pad = (rows > per) ? (rows - per) / 2 : 0;
@@ -631,24 +632,51 @@ struct App {
 			frame.text(cx + 4 + (mw > 2 ? mw : 0), cy, pc, lerp(pal::kDim, hi, 0.4 + u * 0.6));
 		}
 
-		const int half = (w - 6) / 2;
-		int cy = y + h - 3;              // leaves a blank row above the footer
-		draw_spin(x + 3, cy, half, "threads", std::to_string(threads), focus == F_THREADS);
-		draw_spin(x + 3 + half, cy, half, "lanes", std::to_string(lanes),
-		          focus == F_LANES);
-		++cy;
+		// Three controls, one per row, each on its own line with a gap either
+		// side so the focus ring has somewhere to go.
+		const int bx = x + 2, bw = w - 4;
+		const int ix = bx + 3, iw = bw - 6;
 		const bool on = engine.active();
 		const bool mining = client.state() == stratum::State::Ready;
-		draw_button(x + 3, cy, w - 6,
-		            on ? "Stop" : (mining ? "Start mining" : "Start benchmark"),
+
+		int cy = y + h - 7;
+		draw_spin(ix, cy, iw, "threads", std::to_string(threads), focus == F_THREADS);
+		if (focus == F_THREADS)
+			focus_box(bx, cy, bw, pal::kYellow);
+
+		cy += 2;
+		draw_spin(ix, cy, iw, "lanes", std::to_string(lanes), focus == F_LANES);
+		if (focus == F_LANES)
+			focus_box(bx, cy, bw, pal::kYellow);
+
+		cy += 2;
+		draw_button(ix, cy, iw, on ? "Stop" : (mining ? "Start mining" : "Start benchmark"),
 		            focus == F_RUN, on ? pal::kRed : pal::kGreen);
-		frame.text(x + w - 27, cy, "no core pinning on macOS", pal::kDim);
+		if (focus == F_RUN)
+			focus_box(bx, cy, bw, on ? pal::kRed : pal::kGreen);
+	}
+
+	// System 7 signalled the active control with a ring around it. One row is
+	// too short to box, so controls are spaced and the gaps carry the ring --
+	// only one control is focused at a time, so adjacent rings never collide.
+	void focus_box(int x, int y, int w, Rgb col)
+	{
+		frame.put(x, y - 1, "╭", col);
+		frame.hline(x + 1, y - 1, w - 2, "─", col);
+		frame.put(x + w - 1, y - 1, "╮", col);
+		frame.put(x, y, "│", col);
+		frame.put(x + w - 1, y, "│", col);
+		frame.put(x, y + 1, "╰", col);
+		frame.hline(x + 1, y + 1, w - 2, "─", col);
+		frame.put(x + w - 1, y + 1, "╯", col);
 	}
 
 	void draw_spin(int x, int y, int w, const std::string &label, const std::string &val,
 	               bool foc)
 	{
 		const Rgb fg = foc ? pal::kInk : pal::kLabel;
+		if (foc)
+			frame.text(x - 2, y, "▸", pal::kYellow);
 		frame.text(x, y, label, fg, pal::kPanel, foc);
 		const std::string v = "◀ " + val + " ▶";
 		int vx = x + w - disp_len(v) - 2;
@@ -660,9 +688,10 @@ struct App {
 
 	void draw_button(int x, int y, int w, const std::string &label, bool foc, Rgb col)
 	{
-		const std::string s = (foc ? "▸ " : "  ") + label;
 		(void)w;
-		frame.text(x, y, s, foc ? col : pal::kLabel, pal::kPanel, foc);
+		if (foc)
+			frame.text(x - 2, y, "▸", col);
+		frame.text(x, y, label, foc ? col : pal::kLabel, pal::kPanel, foc);
 	}
 
 	// A dash reads as "no value yet" without pretending the field is absent.
@@ -681,12 +710,12 @@ struct App {
 		const bool foc = foc_pools || foc_connect;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
 		const int c = x + 3;
-		const int btn = y + h - 2;          // the button owns this row
+		const int btn = y + h - 3;          // lower button; ring uses y+h-2
 		int ty = y + 2;                     // blank row under the title
 		// Every row is guarded: this panel shares its height with the cores
 		// panel beside it, so on a short terminal the lower blocks drop
 		// rather than overprinting the button.
-		auto room = [&](int need) { return ty + need <= btn - 1; };
+		auto room = [&](int need) { return ty + need <= btn - 3; };
 
 		if (pools.empty()) {
 			if (room(1)) frame.text(c, ty++, "no pool configured", pal::kDim);
@@ -736,10 +765,16 @@ struct App {
 			stat(col2, ty++, "last", age, ls > 0 ? pal::kInk : pal::kDim);
 		}
 
-		const int connect_row = btn - 1;
-		draw_button(c, connect_row, w - 6, live ? "Disconnect" : "Connect",
-		            foc_connect, live ? pal::kRed : pal::kGreen);
-		draw_button(c, btn, w - 6, "Edit pools…", foc_pools, pal::kPurple);
+		const int bx = x + 2, bw = w - 4;
+		const int ix = bx + 3;
+		const int connect_row = btn - 2;
+		draw_button(ix, connect_row, bw - 6, live ? "Disconnect" : "Connect", foc_connect,
+		            live ? pal::kRed : pal::kGreen);
+		if (foc_connect)
+			focus_box(bx, connect_row, bw, live ? pal::kRed : pal::kGreen);
+		draw_button(ix, btn, bw - 6, "Edit pools…", foc_pools, pal::kPurple);
+		if (foc_pools)
+			focus_box(bx, btn, bw, pal::kPurple);
 	}
 
 	void draw_dashboard()
@@ -752,7 +787,7 @@ struct App {
 		// Side by side, so both panels take the taller requirement: cores need
 		// pad + rows + pad + spinners + button + pad; the pool panel needs
 		// identity, status, the share grid and its note.
-		const int cores_need = (sys.ncpu + 1) / 2 + 7;
+		const int cores_need = (sys.ncpu + 1) / 2 + 10;
 		const int pool_need = 15;
 		int bot = cores_need > pool_need ? cores_need : pool_need;
 		// Reserve a readable graph rather than splitting the remainder evenly:
