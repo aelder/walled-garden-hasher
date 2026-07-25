@@ -259,14 +259,53 @@ struct ShareStats {
 	double connected_since = 0;
 };
 
-// --- pool configuration ---------------------------------------------------
+// --- identity and pools ---------------------------------------------------
+//
+// Most miners make you retype your wallet address into every pool entry. It is
+// the same address every time, so it is asked once and composed with the rig
+// name into the stratum user: <address>.<rig>. Switching pools then costs one
+// keystroke instead of a re-entry.
+
+struct Identity {
+	std::string address;   // Verus R-address
+	std::string rig;       // worker name
+
+	bool complete() const { return !address.empty(); }
+	std::string user() const
+	{
+		return rig.empty() ? address : address + "." + rig;
+	}
+	// Addresses are 34 characters and do not fit next to anything.
+	std::string shortened() const
+	{
+		if (address.size() < 14)
+			return user();
+		return address.substr(0, 6) + "…" + address.substr(address.size() - 4) +
+		       (rig.empty() ? "" : "." + rig);
+	}
+};
 
 struct Pool {
-	std::string label = "";
-	std::string host = "";
+	std::string label;
+	std::string host;
 	std::string port = "3956";
-	std::string user = "";
-	std::string pass = "x";
+};
+
+// Seeds for the pool list, written out on first run and editable thereafter,
+// so a wrong value here is corrected once and stays corrected.
+//
+// Only LuckPool is confirmed: na.luckpool.net:3956 is what this repo has
+// actually mined against. The rest carry 3956 because that is the conventional
+// VerusHash stratum port, not because their endpoint has been verified -- the
+// UI shows host:port on every row precisely so a wrong one is visible rather
+// than mysterious.
+static const Pool kPresets[] = {
+	{"LuckPool NA", "na.luckpool.net", "3956"},
+	{"LuckPool EU", "eu.luckpool.net", "3956"},
+	{"LuckPool AP", "ap.luckpool.net", "3956"},
+	{"Vipor", "na.vipor.net", "3956"},
+	{"Verus.farm", "pool.verus.farm", "3956"},
+	{"Verus.io", "pool.verus.io", "3956"},
 };
 
 static std::string config_dir()
@@ -274,51 +313,55 @@ static std::string config_dir()
 	const char *home = getenv("HOME");
 	return std::string(home ? home : ".") + "/.config/vh22";
 }
-static std::string config_path() { return config_dir() + "/pools.conf"; }
+static std::string config_path() { return config_dir() + "/config"; }
 
-static std::vector<Pool> load_pools(int *selected)
+struct Settings {
+	Identity id;
+	std::vector<Pool> pools;
+	int selected = 0;
+};
+
+static bool load_settings(Settings &out)
 {
-	std::vector<Pool> v;
-	*selected = 0;
 	FILE *f = fopen(config_path().c_str(), "r");
 	if (!f)
-		return v;
+		return false;
 	char line[512];
 	while (fgets(line, sizeof(line), f)) {
 		std::string s(line);
 		while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
 			s.pop_back();
 		const size_t eq = s.find('=');
-		if (eq == std::string::npos)
+		if (eq == std::string::npos || s[0] == '#')
 			continue;
-		const std::string k = s.substr(0, eq), val = s.substr(eq + 1);
-		if (k == "selected") { *selected = atoi(val.c_str()); continue; }
-		if (k == "pool") { v.push_back(Pool()); v.back().label = val; continue; }
-		if (v.empty())
-			continue;
-		if (k == "host") v.back().host = val;
-		else if (k == "port") v.back().port = val;
-		else if (k == "user") v.back().user = val;
-		else if (k == "pass") v.back().pass = val;
+		const std::string k = s.substr(0, eq), v = s.substr(eq + 1);
+		if (k == "address") out.id.address = v;
+		else if (k == "rig") out.id.rig = v;
+		else if (k == "selected") out.selected = atoi(v.c_str());
+		else if (k == "pool") { out.pools.push_back(Pool()); out.pools.back().label = v; }
+		else if (!out.pools.empty() && k == "host") out.pools.back().host = v;
+		else if (!out.pools.empty() && k == "port") out.pools.back().port = v;
 	}
 	fclose(f);
-	if (*selected >= (int)v.size())
-		*selected = 0;
-	return v;
+	if (out.selected >= (int)out.pools.size())
+		out.selected = 0;
+	return true;
 }
 
-static bool save_pools(const std::vector<Pool> &v, int selected)
+static bool save_settings(const Settings &st)
 {
 	mkdir(config_dir().c_str(), 0700);
 	FILE *f = fopen(config_path().c_str(), "w");
 	if (!f)
 		return false;
-	fprintf(f, "# vh22 pool configuration\nselected=%d\n", selected);
-	for (const auto &p : v)
-		fprintf(f, "pool=%s\nhost=%s\nport=%s\nuser=%s\npass=%s\n", p.label.c_str(),
-		        p.host.c_str(), p.port.c_str(), p.user.c_str(), p.pass.c_str());
+	fprintf(f, "# vh22 configuration\n");
+	fprintf(f, "address=%s\nrig=%s\nselected=%d\n\n", st.id.address.c_str(),
+	        st.id.rig.c_str(), st.selected);
+	for (const auto &p : st.pools)
+		fprintf(f, "pool=%s\nhost=%s\nport=%s\n", p.label.c_str(), p.host.c_str(),
+		        p.port.c_str());
 	fclose(f);
-	chmod(config_path().c_str(), 0600);  // it holds worker credentials
+	chmod(config_path().c_str(), 0600);  // it names the wallet being mined to
 	return true;
 }
 
@@ -366,7 +409,7 @@ static const char *const kLogoLargeRows[] = {
 static const LogoArt kLogoSmall = {7, kLogoSmallRows};
 static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
-enum class Screen { Dashboard, Pools, EditPool };
+enum class Screen { Dashboard, Pools, EditPool, Setup };
 enum Focus { F_THREADS = 0, F_LANES, F_START, F_BENCH, F_CONNECT, F_POOLS, F_COUNT };
 enum class Mode { Idle, Mining, Benchmark };
 
@@ -418,16 +461,28 @@ struct App {
 	stratum::Client client;
 	Mode mode = Mode::Idle;
 	GlyphKinetics kin;
-	std::vector<Pool> pools;
-	int pool_sel = 0, pool_cursor = 0, field = 0;
+	Settings cfg;
+	int pool_cursor = 0, field = 0;
 	Pool draft;
+	Identity id_draft;
 	std::string status;
 
 	void init()
 	{
 		sys.probe();
 		threads = sys.ncpu;
-		pools = load_pools(&pool_sel);
+		if (!load_settings(cfg) || cfg.pools.empty()) {
+			// First run: seed the pool list so there is nothing to type but
+			// the two things only the user knows.
+			for (const auto &p : kPresets)
+				cfg.pools.push_back(p);
+			cfg.selected = 0;
+		}
+		if (!cfg.id.complete()) {
+			id_draft = cfg.id;
+			screen = Screen::Setup;
+			field = 0;
+		}
 		hist.assign(400, 0.0);
 		uint8_t header[1487];
 		for (size_t i = 0; i < sizeof(header); ++i)
@@ -791,28 +846,22 @@ struct App {
 		const bool foc = foc_pools || foc_connect;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
 		const int c = x + 3;
-		const int btn = y + h - 3;          // lower button; ring uses y+h-2
-		int ty = y + 2;                     // blank row under the title
-		// Every row is guarded: this panel shares its height with the cores
-		// panel beside it, so on a short terminal the lower blocks drop
-		// rather than overprinting the button.
+		const int btn = y + h - 3;
+		int ty = y + 2;
 		auto room = [&](int need) { return ty + need <= btn - 3; };
 
-		if (pools.empty()) {
+		if (cfg.pools.empty()) {
 			if (room(1)) frame.text(c, ty++, "no pool configured", pal::kDim);
-			if (room(2)) { ++ty; frame.text(c, ty++, "add one below", pal::kDim); }
 		} else {
-			const Pool &p = pools[(size_t)pool_sel];
+			const Pool &p = cfg.pools[(size_t)cfg.selected];
 			if (room(1))
-				frame.text(c, ty++, "● " + (p.label.empty() ? "(unnamed)" : p.label),
-				           pal::kPurple, pal::kPanel, true);
+				frame.text(c, ty++, "● " + p.label, pal::kPurple, pal::kPanel, true);
+			if (room(1))
+				frame.text(c + 2, ty++, p.host + ":" + p.port, pal::kInk);
 			if (room(1))
 				frame.text(c + 2, ty++,
-				           p.host.empty() ? "(no host)" : p.host + ":" + p.port,
-				           pal::kInk);
-			if (room(1))
-				frame.text(c + 2, ty++, p.user.empty() ? "(no worker)" : p.user,
-				           pal::kLabel);
+				           cfg.id.complete() ? cfg.id.shortened() : "(no wallet set)",
+				           cfg.id.complete() ? pal::kLabel : pal::kRed);
 		}
 
 		const stratum::State st = client.state();
@@ -853,7 +902,7 @@ struct App {
 		            live ? pal::kRed : pal::kGreen);
 		if (foc_connect)
 			focus_box(bx, connect_row, bw, live ? pal::kRed : pal::kGreen);
-		draw_button(ix, btn, bw - 6, "Edit pools…", foc_pools, pal::kPurple);
+		draw_button(ix, btn, bw - 6, "Change pool…", foc_pools, pal::kPurple);
 		if (foc_pools)
 			focus_box(bx, btn, bw, pal::kPurple);
 	}
@@ -886,48 +935,95 @@ struct App {
 		help(" ↑↓ move   ←→ adjust   ⏎ select   q quit ");
 	}
 
+	// Pick a pool. That is the whole screen: the wallet is already known, so
+	// selecting costs one keystroke and nothing has to be retyped.
 	void draw_pools()
 	{
 		const int W = frame.width(), H = frame.height();
 		window(frame, 0, 0, W, H - 1, "Pools", true, pal::kPurple);
+
 		int ty = 2;
-		frame.text(3, ty++, "saved pools", pal::kLabel);
-		if (pools.empty())
-			frame.text(5, ty++, "none yet — press n to add one", pal::kDim);
-		for (size_t i = 0; i < pools.size(); ++i) {
+		frame.text(4, ty++, "mining as", pal::kLabel);
+		frame.text(15, ty - 1, cfg.id.complete() ? cfg.id.user() : "(not set — press i)",
+		           cfg.id.complete() ? pal::kInk : pal::kRed, pal::kPanel, true);
+		++ty;
+
+		for (size_t i = 0; i < cfg.pools.size(); ++i) {
 			const bool cur = (int)i == pool_cursor;
-			const bool sel = (int)i == pool_sel;
-			std::string s = (cur ? "▸ " : "  ");
-			s += (sel ? "● " : "○ ");
-			s += pools[i].label.empty() ? "(unnamed)" : pools[i].label;
-			frame.text(3, ty, s, cur ? pal::kInk : pal::kLabel, pal::kPanel, cur);
-			frame.text(34, ty, pools[i].host + ":" + pools[i].port,
+			const bool sel = (int)i == cfg.selected;
+			if (cur) {
+				frame.text(2, ty, "▸", pal::kYellow);
+				focus_box(3, ty, W - 6, pal::kYellow);
+			}
+			frame.text(6, ty, sel ? "●" : "○", sel ? pal::kPurple : pal::kDim);
+			frame.text(8, ty, cfg.pools[i].label, cur ? pal::kInk : pal::kLabel,
+			           pal::kPanel, cur);
+			frame.text(30, ty, cfg.pools[i].host + ":" + cfg.pools[i].port,
 			           cur ? pal::kPurple : pal::kDim);
-			++ty;
+			ty += 2;
 		}
-		frame.text(3, H - 4, "⏎ edit   space select   n new   d delete   esc back",
+
+		frame.text(4, H - 4, "the endpoint is editable — press e if a pool has moved",
 		           pal::kDim);
-		help(" ↑↓ move   ⏎ edit   space select   n new   d delete   esc back ");
+		help(" ↑↓ move   ⏎ select   e edit   n new   d delete   i identity   esc back ");
 	}
 
 	void draw_edit()
 	{
 		const int W = frame.width(), H = frame.height();
 		window(frame, 0, 0, W, H - 1, "Edit pool", true, pal::kPurple);
-		const char *names[5] = {"label", "host", "port", "worker", "password"};
-		std::string *vals[5] = {&draft.label, &draft.host, &draft.port, &draft.user,
-		                        &draft.pass};
+		const char *names[3] = {"name", "host", "port"};
+		std::string *vals[3] = {&draft.label, &draft.host, &draft.port};
 		int ty = 3;
-		for (int i = 0; i < 5; ++i) {
+		for (int i = 0; i < 3; ++i) {
 			const bool foc = i == field;
-			frame.text(5, ty, names[i], foc ? pal::kInk : pal::kLabel, pal::kPanel, foc);
+			if (foc)
+				focus_box(3, ty, W - 6, pal::kYellow);
+			frame.text(6, ty, names[i], foc ? pal::kInk : pal::kLabel, pal::kPanel, foc);
 			const std::string v = *vals[i] + (foc ? "▌" : "");
-			frame.text(18, ty, v.empty() ? "—" : v, foc ? pal::kYellow : pal::kInk);
+			frame.text(20, ty, v.empty() ? "—" : v, foc ? pal::kYellow : pal::kInk);
 			ty += 2;
 		}
-		frame.text(5, H - 5, "credentials are stored in ~/.config/vh22/pools.conf (0600)",
+		frame.text(6, H - 4, "the wallet is set once under identity, not per pool",
 		           pal::kDim);
 		help(" ↑↓ field   type to edit   ⏎ save   esc cancel ");
+	}
+
+	// Asked once, on first run. Everything else can be picked from a list.
+	void draw_setup()
+	{
+		const int W = frame.width(), H = frame.height();
+		window(frame, 0, 0, W, H - 1, "Welcome", true, pal::kGreen);
+
+		int ty = 3;
+		if (block_text_width("VH22") <= W - 8) {
+			block_text(frame, 6, ty, "VH22", pal::kInk);
+			ty += kBlockRows + 1;
+		}
+		frame.text(6, ty++, "Two things, once. Everything after this is a list.",
+		           pal::kLabel);
+		++ty;
+
+		const char *names[2] = {"Verus address", "rig name"};
+		std::string *vals[2] = {&id_draft.address, &id_draft.rig};
+		const char *hints[2] = {"the wallet rewards are paid to",
+		                        "how this machine shows up on the pool"};
+		for (int i = 0; i < 2; ++i) {
+			const bool foc = i == field;
+			if (foc)
+				focus_box(5, ty, W - 10, pal::kGreen);
+			frame.text(8, ty, names[i], foc ? pal::kInk : pal::kLabel, pal::kPanel, foc);
+			const std::string v = *vals[i] + (foc ? "▌" : "");
+			frame.text(26, ty, v.empty() ? "—" : v, foc ? pal::kYellow : pal::kInk);
+			// Below the ring, not on it: the ring occupies ty +/- 1.
+			frame.text(8, ty + 2, hints[i], pal::kDim);
+			ty += 4;
+		}
+		frame.text(6, H - 4,
+		           "stored in ~/.config/vh22/config — no wallet, no private key, just "
+		           "the payout address",
+		           pal::kDim);
+		help(" ↑↓ field   type to enter   ⏎ save   esc skip for now ");
 	}
 
 	void help(const std::string &s)
@@ -965,34 +1061,57 @@ struct App {
 
 	bool on_key(const Event &e)
 	{
-		if (screen == Screen::EditPool) {
+		if (screen == Screen::Setup) {
+			std::string *v[2] = {&id_draft.address, &id_draft.rig};
 			switch (e.key) {
-			case Key::Up: field = (field + 4) % 5; break;
-			case Key::Down: field = (field + 1) % 5; break;
+			case Key::Up: field = (field + 1) % 2; break;
+			case Key::Down:
+			case Key::Tab: field = (field + 1) % 2; break;
 			case Key::Enter:
-				if (pool_cursor >= (int)pools.size())
-					pools.push_back(draft);
+				cfg.id = id_draft;
+				save_settings(cfg);
+				screen = Screen::Dashboard;
+				status = cfg.id.complete() ? "saved" : "";
+				break;
+			case Key::Escape: screen = Screen::Dashboard; break;
+			case Key::Backspace:
+				if (!v[field]->empty())
+					v[field]->pop_back();
+				break;
+			case Key::Char:
+				if (e.ch >= 32 && e.ch < 127 && v[field]->size() < 64)
+					v[field]->push_back(e.ch);
+				break;
+			case Key::Quit: return false;
+			default: break;
+			}
+			return true;
+		}
+
+		if (screen == Screen::EditPool) {
+			std::string *v[3] = {&draft.label, &draft.host, &draft.port};
+			switch (e.key) {
+			case Key::Up: field = (field + 2) % 3; break;
+			case Key::Down:
+			case Key::Tab: field = (field + 1) % 3; break;
+			case Key::Enter:
+				if (pool_cursor >= (int)cfg.pools.size())
+					cfg.pools.push_back(draft);
 				else
-					pools[(size_t)pool_cursor] = draft;
-				save_pools(pools, pool_sel);
+					cfg.pools[(size_t)pool_cursor] = draft;
+				save_settings(cfg);
 				status = "saved";
 				screen = Screen::Pools;
 				break;
 			case Key::Escape: screen = Screen::Pools; break;
-			case Key::Backspace: {
-				std::string *v[5] = {&draft.label, &draft.host, &draft.port,
-				                     &draft.user, &draft.pass};
+			case Key::Backspace:
 				if (!v[field]->empty())
 					v[field]->pop_back();
 				break;
-			}
-			case Key::Char: {
-				std::string *v[5] = {&draft.label, &draft.host, &draft.port,
-				                     &draft.user, &draft.pass};
+			case Key::Char:
 				if (e.ch >= 32 && e.ch < 127 && v[field]->size() < 64)
 					v[field]->push_back(e.ch);
 				break;
-			}
 			case Key::Quit: return false;
 			default: break;
 			}
@@ -1003,34 +1122,40 @@ struct App {
 			switch (e.key) {
 			case Key::Up: if (pool_cursor > 0) --pool_cursor; break;
 			case Key::Down:
-				if (pool_cursor + 1 < (int)pools.size()) ++pool_cursor;
+				if (pool_cursor + 1 < (int)cfg.pools.size()) ++pool_cursor;
 				break;
 			case Key::Enter:
-				if (!pools.empty()) {
-					draft = pools[(size_t)pool_cursor];
-					field = 0;
-					screen = Screen::EditPool;
+				// Selecting is the common case, so it is the plain key.
+				if (!cfg.pools.empty()) {
+					cfg.selected = pool_cursor;
+					save_settings(cfg);
+					status = "pool set";
+					screen = Screen::Dashboard;
 				}
 				break;
 			case Key::Escape: screen = Screen::Dashboard; break;
 			case Key::Char:
-				if (e.ch == 'n') {
-					draft = Pool();
-					pool_cursor = (int)pools.size();
+				if (e.ch == 'e' && !cfg.pools.empty()) {
+					draft = cfg.pools[(size_t)pool_cursor];
 					field = 0;
 					screen = Screen::EditPool;
-				} else if (e.ch == 'd' && !pools.empty()) {
-					pools.erase(pools.begin() + pool_cursor);
-					if (pool_cursor >= (int)pools.size() && pool_cursor)
+				} else if (e.ch == 'n') {
+					draft = Pool();
+					pool_cursor = (int)cfg.pools.size();
+					field = 0;
+					screen = Screen::EditPool;
+				} else if (e.ch == 'i') {
+					id_draft = cfg.id;
+					field = 0;
+					screen = Screen::Setup;
+				} else if (e.ch == 'd' && cfg.pools.size() > 1) {
+					cfg.pools.erase(cfg.pools.begin() + pool_cursor);
+					if (pool_cursor >= (int)cfg.pools.size() && pool_cursor)
 						--pool_cursor;
-					if (pool_sel >= (int)pools.size())
-						pool_sel = 0;
-					save_pools(pools, pool_sel);
+					if (cfg.selected >= (int)cfg.pools.size())
+						cfg.selected = 0;
+					save_settings(cfg);
 					status = "deleted";
-				} else if (e.ch == ' ' && !pools.empty()) {
-					pool_sel = pool_cursor;
-					save_pools(pools, pool_sel);
-					status = "selected";
 				} else if (e.ch == 'q') {
 					return false;
 				}
@@ -1085,21 +1210,26 @@ struct App {
 					}
 					engine.set_pool(nullptr);
 					status = "disconnected";
-				} else if (!pools.empty() &&
-				           !pools[(size_t)pool_sel].host.empty()) {
-					const Pool &p = pools[(size_t)pool_sel];
-					stratum::Config cfg;
-					cfg.host = p.host;
-					cfg.port = p.port;
-					cfg.user = p.user;
-					cfg.pass = p.pass;
-					client.start(cfg);
+				} else if (!cfg.id.complete()) {
+					id_draft = cfg.id;
+					field = 0;
+					screen = Screen::Setup;
+					status = "set your address first";
+				} else if (!cfg.pools.empty() &&
+				           !cfg.pools[(size_t)cfg.selected].host.empty()) {
+					const Pool &p = cfg.pools[(size_t)cfg.selected];
+					stratum::Config sc;
+					sc.host = p.host;
+					sc.port = p.port;
+					sc.user = cfg.id.user();   // composed, never retyped
+					sc.pass = "x";
+					client.start(sc);
 					status = "connecting";
 				} else {
-					status = "set a host first";
+					status = "that pool has no host";
 				}
 			} else if (focus == F_POOLS) {
-				pool_cursor = pool_sel;
+				pool_cursor = cfg.selected;
 				screen = Screen::Pools;
 			}
 			break;
@@ -1143,6 +1273,8 @@ struct App {
 				draw_dashboard();
 			} else if (screen == Screen::Pools) {
 				draw_pools();
+			} else if (screen == Screen::Setup) {
+				draw_setup();
 			} else {
 				draw_edit();
 			}
