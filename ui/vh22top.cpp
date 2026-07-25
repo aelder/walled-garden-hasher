@@ -323,7 +323,14 @@ static bool save_pools(const std::vector<Pool> &v, int selected)
 
 // --- app ------------------------------------------------------------------
 
-static const std::string kLogoRows[7] = {
+// Two Apple logos. The watermark takes the largest that fits the plot; the
+// header always uses the small one.
+struct LogoArt {
+	int rows;
+	const char *const *line;
+};
+
+static const char *const kLogoSmallRows[] = {
 	"       .:'   ",
 	"    _ :'_    ",
 	" .'`_`-'_``. ",
@@ -332,6 +339,31 @@ static const std::string kLogoRows[7] = {
 	" :_______`-; ",
 	"  `._.-._.'  ",
 };
+
+// The full neofetch apple. Denser, so it occludes more of the stream -- which
+// is the point.
+static const char *const kLogoLargeRows[] = {
+	"                    ..'        ",
+	"                 ,xNMM.        ",
+	"               .OMMMMo         ",
+	"               lMM\"           ",
+	"     .;loddo:.   .olloddol;.   ",
+	"   cKMMMMMMMMMMNWMMMMMMMMMM0:  ",
+	" .KMMMMMMMMMMMMMMMMMMMMMMMWd.  ",
+	" XMMMMMMMMMMMMMMMMMMMMMMMMX.   ",
+	";MMMMMMMMMMMMMMMMMMMMMMMMMM:   ",
+	":MMMMMMMMMMMMMMMMMMMMMMMMMM:   ",
+	".MMMMMMMMMMMMMMMMMMMMMMMMMX.   ",
+	" kMMMMMMMMMMMMMMMMMMMMMMMMWd.  ",
+	" 'XMMMMMMMMMMMMMMMMMMMMMMMMMMk ",
+	"  'XMMMMMMMMMMMMMMMMMMMMMMMMK. ",
+	"    kMMMMMMMMMMMMMMMMMMMMMMd   ",
+	"     ;KMMMMMMMWXXWMMMMMMMk.    ",
+	"       \"cooc*\"    \"*coo'\"    ",
+};
+
+static const LogoArt kLogoSmall = {7, kLogoSmallRows};
+static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
 static const char *kLogo[7] = {
 	"       .:'",
@@ -445,19 +477,34 @@ struct App {
 	void draw_watermark(int gx, int gy, int gw, int gh, const std::vector<int> &fill,
 	                    std::vector<uint8_t> &occlude)
 	{
-		const int lw = 13, lh = 7;
-		if (gw < lw + 4 || gh < lh)
+		const LogoArt *art = nullptr;
+		int lw = 0;
+		for (const LogoArt *cand : {&kLogoLarge, &kLogoSmall}) {
+			int wmax = 0;
+			for (int r = 0; r < cand->rows; ++r) {
+				const int n = (int)strlen(cand->line[r]);
+				if (n > wmax)
+					wmax = n;
+			}
+			if (gw >= wmax + 4 && gh >= cand->rows) {
+				art = cand;
+				lw = wmax;
+				break;
+			}
+		}
+		if (!art)
 			return;
+
 		const int ox = gx + (gw - lw) / 2;
-		const int oy = gy + (gh - lh) / 2;
+		const int oy = gy + (gh - art->rows) / 2;
 		const int dots_h = gh * 4;
 
-		for (int r = 0; r < lh; ++r) {
-			const std::string &row = kLogoRows[r];
-			// fastfetch stripe order: the crown shares green, then the six
-			// bands run down the body.
-			const Rgb bright = pal::kRainbow[r == 0 ? 0 : (r - 1 < 6 ? r - 1 : 5)];
-			for (int c = 0; c < (int)row.size(); ++c) {
+		for (int r = 0; r < art->rows; ++r) {
+			const char *row = art->line[r];
+			// Six stripes spread across the logo's height, green at the crown.
+			const int band = (r * 6) / art->rows;
+			const Rgb bright = pal::kRainbow[band < 6 ? band : 5];
+			for (int c = 0; row[c]; ++c) {
 				if (row[c] == ' ')
 					continue;   // water flows through the gaps
 				const int cx = ox + c - gx, cy = oy + r - gy;
