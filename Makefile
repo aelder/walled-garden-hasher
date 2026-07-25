@@ -21,9 +21,10 @@ REF_SRC    = ref/ref.cpp
 ENGINE_OBJ = $(ENGINE_SRC:%.cpp=$(BUILD)/%.o)
 REF_OBJ    = $(REF_SRC:%.cpp=$(BUILD)/%.o)
 
-BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench $(BUILD)/vh22-sieve-oracle
+BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench $(BUILD)/vh22-sieve-oracle \
+           $(BUILD)/vh22-top
 
-.PHONY: all clean test bench disas crosscheck
+.PHONY: all clean test bench disas crosscheck top
 all: $(BINARIES)
 
 $(BUILD)/%.o: %.cpp
@@ -38,6 +39,13 @@ $(BUILD)/vh22-bench: $(BUILD)/tools/bench.o $(ENGINE_OBJ)
 
 $(BUILD)/vh22-sieve-oracle: $(BUILD)/tools/sieve_oracle.o $(ENGINE_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+
+UI_OBJ = $(BUILD)/ui/tui.o $(BUILD)/ui/vh22top.o
+$(BUILD)/vh22-top: $(UI_OBJ) $(ENGINE_OBJ)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+
+top: $(BUILD)/vh22-top
+	$(BUILD)/vh22-top
 
 # End-to-end diff against the deployed sse2neon build. Reaches outside the
 # tree into ../verus, so it is not part of `all`.

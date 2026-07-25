@@ -20,6 +20,26 @@ fresh clone needs it once:
 git submodule update --init verus/sse2neon
 ```
 
+## vh22-top
+
+`make top` builds and runs the terminal front end.
+
+System 7 chrome -- pinstriped title bars, a close box on the focused window,
+square shoulders -- with the 1977 six-colour Apple logo as the data palette.
+The hashrate plot is btop-density braille (2x4 dots per cell) coloured by
+height in logo order, green at the top, so a healthy run paints the stripes.
+Arrow keys move focus and adjust values; the whole UI is keyboard-driven.
+
+Live per-core load comes from `host_processor_info`, the same source btop
+reads, with performance and efficiency cores labelled and coloured apart.
+Cores are never dimmed to imply a thread is bound to one: macOS has no
+thread-to-core pinning API, so workers land wherever the scheduler puts them
+and every meter shows real load. The panel says so.
+
+Pools are stored in `~/.config/vh22/pools.conf` at mode 0600. Connecting to
+one needs the stratum client, which does not exist yet, so the run control is
+labelled "Start benchmark" rather than pretending otherwise.
+
 ## Layout
 
 | Path | What |
@@ -30,6 +50,7 @@ git submodule update --init verus/sse2neon
 | `src/clhash_wave.cpp` | N-way interleaved, case-bucketed kernel |
 | `src/verushash.cpp` | Template setup, key expansion, per-nonce driver |
 | `ref/` | Intrinsic-free specification. Slow on purpose |
+| `ui/` | vh22-top: terminal layer, widgets, app |
 | `tools/` | Harnesses, benchmark, disassembly audit, A/B script |
 
 ## Results
