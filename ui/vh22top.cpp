@@ -365,16 +365,6 @@ static const char *const kLogoLargeRows[] = {
 static const LogoArt kLogoSmall = {7, kLogoSmallRows};
 static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
-static const char *kLogo[7] = {
-	"       .:'",
-	"    _ :'_",
-	" .'`_`-'_``.",
-	":________.-'",
-	":_______:",
-	" :_______`-;",
-	"  `._.-._.'",
-};
-
 enum class Screen { Dashboard, Pools, EditPool };
 enum Focus { F_THREADS = 0, F_LANES, F_RUN, F_CONNECT, F_POOLS, F_COUNT };
 
@@ -448,25 +438,25 @@ struct App {
 
 	void draw_header(int x, int y, int w, int h)
 	{
-		window(frame, x, y, w, h, "vh22", false, pal::kChrome);
-		const bool room = h >= 9;
-		int tx = x + 3;
-		if (room) {
-			for (int i = 0; i < 7 && i + 2 < h; ++i)
-				frame.text(x + 3, y + 1 + i, kLogo[i], pal::kRainbow[i == 0 ? 0 : i - 1]);
-			tx = x + 20;
+		window(frame, x, y, w, h, "The Walled Garden Hasher", false, pal::kChrome);
+
+		// The machine is the headline, in the block face. Read from sysctl
+		// rather than hard-coded, so it says whatever silicon it is running on.
+		int ty = y + 1;
+		const int bw = block_text_width(sys.model);
+		if (h >= 8 && bw <= w - 6) {
+			block_text(frame, x + 3, ty, sys.model, pal::kInk);
+			ty += kBlockRows;
+		} else {
+			frame.text(x + 3, ty++, sys.model, pal::kInk, pal::kPanel, true);
 		}
-		int ty = y + 2;
-		frame.text(tx, ty++, "VerusHash 2.2", pal::kInk, pal::kPanel, true);
-		frame.text(tx, ty++, "native AArch64 · no sse2neon", pal::kLabel);
-		++ty;
+
 		char b[160];
-		snprintf(b, sizeof(b), "%s", sys.model.c_str());
-		frame.text(tx, ty++, b, pal::kInk);
+		frame.text(x + 3, ty++, "VerusHash 2.2  ·  AArch64", pal::kLabel);
 		snprintf(b, sizeof(b), "%d cores  ·  %dP + %dE  ·  %.0f GB", sys.ncpu, sys.nperf,
 		         sys.neff, sys.mem_gb);
-		frame.text(tx, ty++, b, pal::kLabel);
-		if (h >= 9)
+		frame.text(x + 3, ty++, b, pal::kLabel);
+		if (h >= 6)
 			rainbow_rule(frame, x + 2, y + h - 2, w - 4);
 	}
 
