@@ -46,6 +46,29 @@ Full-machine convergence is expected: at 10 threads the machine is power- and
 bandwidth-limited, so per-core engine quality stops being the binding
 constraint.
 
+### Peak
+
+`vh22-bench --peak` reports the fastest sampled window rather than the run
+average. Best recorded, 8 s, 64 lanes, 10 threads, CPU only:
+
+```
+PEAK      30.47 MH/s   (best 100 ms window)
+          30.33 MH/s   (best 500 ms)
+          30.20 MH/s   (best 1 s)
+average   29.69 MH/s   (239415296 hashes in 8.06 s)
+```
+
+The 1 s figure tracking the 100 ms one is what says the peak is an operating
+point and not a scheduling burst caught by a short window. The timeline was
+flat across the full 8 s, so this is short of thermal throttling.
+
+**Peak is a property of the machine's state as much as the code, so it needs
+its conditions quoted with it.** That run was at load average 1.74 on a
+session-cold machine. The identical binary measured 28.6-29.1 MH/s later the
+same session at load 3.10 with accumulated heat -- a 5% spread with no code
+change. Comparisons between builds must be interleaved A/B pairs inside one
+short window; absolute peaks across sessions are not comparable.
+
 Correctness: 70255 differential checks against `ref/`, 2800 against the
 upstream build, 0 failures.
 
