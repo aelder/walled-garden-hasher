@@ -6,6 +6,7 @@
 // The hashrate plot is btop-density braille, coloured by height through the
 // 1977 logo stripes.
 #include "tui.h"
+#include "stratum.h"
 #include "vh22/verushash.h"
 
 #include <mach/mach.h>
@@ -18,6 +19,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -31,6 +33,13 @@
 
 using namespace vh22;
 using namespace vh22::tui;
+
+static double now_wall()
+{
+	struct timeval tv;
+	gettimeofday(&tv, nullptr);
+	return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
+}
 
 static double now_s()
 {
@@ -134,6 +143,7 @@ struct Worker {
 class Engine {
 public:
 	void configure(const uint8_t *header, size_t len) { build_template(tpl_, header, len); }
+	void set_pool(stratum::Client *c) { pool_ = c; }
 
 	void start(int threads, int lanes)
 	{
@@ -166,19 +176,71 @@ private:
 		Hasher h(lanes);
 		if (!h.valid())
 			return;
-		h.reset(tpl_);
-		uint32_t nonce = (uint32_t)idx * 0x01000000u;
 		const int n = h.lanes();
-		while (g_running.load(std::memory_order_relaxed)) {
-			for (int r = 0; r < 32; ++r) {
-				h.run_wave(nonce, 0);
-				nonce += (uint32_t)n;
+
+		// Separates this worker in the nonce space. It lands at header word
+		// 32 and must travel back with any share, or the pool re-derives a
+		// different hash from the one we solved.
+		const uint32_t tag =
+			(uint32_t)(idx * 0x9E3779B1u) ^ (uint32_t)(now_s() * 1000.0);
+
+		if (!pool_) {
+			h.reset(tpl_);
+			uint32_t nonce = (uint32_t)idx * 0x01000000u;
+			while (g_running.load(std::memory_order_relaxed)) {
+				for (int r = 0; r < 32; ++r) {
+					h.run_wave(nonce, 0);
+					nonce += (uint32_t)n;
+				}
+				g_hashes.fetch_add((uint64_t)n * 32, std::memory_order_relaxed);
 			}
-			g_hashes.fetch_add((uint64_t)n * 32, std::memory_order_relaxed);
+			return;
+		}
+
+		Template tpl;
+		uint64_t serial = 0;
+		uint32_t nonce = 0, high = 0;
+		uint32_t target[8] = {0};
+		while (g_running.load(std::memory_order_relaxed)) {
+			stratum::Job j;
+			if (!pool_->current(j) || !j.valid) {
+				usleep(50000);
+				continue;
+			}
+			if (j.serial != serial) {
+				// New job: rebuild the per-template state. The 276 chained
+				// Haraka256 of key expansion happen here, once, not per nonce.
+				serial = j.serial;
+				uint8_t pre[stratum::kFullBytes];
+				j.build_preimage(pre);
+				build_template(tpl, pre, stratum::kFullBytes);
+				uint8_t ns[11];
+				memcpy(ns, j.nonce_space, sizeof(ns));
+				memcpy(ns + 7, &tag, 4);
+				set_nonce_space(tpl, ns, sizeof(ns));
+				h.reset(tpl);
+				memcpy(target, j.target, sizeof(target));
+				high = target[7];
+				nonce = 0;
+			}
+
+			const uint64_t hit = h.run_wave(nonce, high);
+			if (hit) {
+				for (int l = 0; l < n; ++l) {
+					if (!((hit >> l) & 1))
+						continue;
+					if (!hash_meets_target(h.hash_of(l), target))
+						continue;
+					pool_->submit(serial, nonce + (uint32_t)l, tag);
+				}
+			}
+			nonce += (uint32_t)n;
+			g_hashes.fetch_add((uint64_t)n, std::memory_order_relaxed);
 		}
 	}
 
 	Template tpl_;
+	stratum::Client *pool_ = nullptr;
 	std::vector<Worker> workers_;
 };
 
@@ -272,7 +334,7 @@ static const char *kLogo[7] = {
 };
 
 enum class Screen { Dashboard, Pools, EditPool };
-enum Focus { F_THREADS = 0, F_LANES, F_RUN, F_POOLS, F_COUNT };
+enum Focus { F_THREADS = 0, F_LANES, F_RUN, F_CONNECT, F_POOLS, F_COUNT };
 
 struct App {
 	SysInfo sys;
@@ -292,7 +354,7 @@ struct App {
 	uint64_t last_hashes = 0;
 	double last_t = 0;
 
-	ShareStats share;
+	stratum::Client client;
 	std::vector<Pool> pools;
 	int pool_sel = 0, pool_cursor = 0, field = 0;
 	Pool draft;
@@ -450,8 +512,10 @@ struct App {
 		          focus == F_LANES);
 		++cy;
 		const bool on = engine.active();
-		draw_button(x + 3, cy, w - 6, on ? "Stop" : "Start benchmark", focus == F_RUN,
-		            on ? pal::kRed : pal::kGreen);
+		const bool mining = client.state() == stratum::State::Ready;
+		draw_button(x + 3, cy, w - 6,
+		            on ? "Stop" : (mining ? "Start mining" : "Start benchmark"),
+		            focus == F_RUN, on ? pal::kRed : pal::kGreen);
 		frame.text(x + w - 27, cy, "no core pinning on macOS", pal::kDim);
 	}
 
@@ -486,7 +550,9 @@ struct App {
 
 	void draw_pool_panel(int x, int y, int w, int h)
 	{
-		const bool foc = (screen == Screen::Dashboard) && focus == F_POOLS;
+		const bool foc_pools = (screen == Screen::Dashboard) && focus == F_POOLS;
+		const bool foc_connect = (screen == Screen::Dashboard) && focus == F_CONNECT;
+		const bool foc = foc_pools || foc_connect;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
 		const int c = x + 3;
 		const int btn = y + h - 2;          // the button owns this row
@@ -498,7 +564,7 @@ struct App {
 
 		if (pools.empty()) {
 			if (room(1)) frame.text(c, ty++, "no pool configured", pal::kDim);
-			if (room(2)) { ++ty; frame.text(c, ty++, "press ⏎ to add one", pal::kDim); }
+			if (room(2)) { ++ty; frame.text(c, ty++, "add one below", pal::kDim); }
 		} else {
 			const Pool &p = pools[(size_t)pool_sel];
 			if (room(1))
@@ -513,36 +579,41 @@ struct App {
 				           pal::kLabel);
 		}
 
-		const bool on = share.connected;
+		const stratum::State st = client.state();
+		const bool live = st != stratum::State::Disconnected;
+		const bool on = st == stratum::State::Ready;
+		auto &sx = client.stats();
 		if (room(3)) {
 			++ty;
-			stat(c, ty++, "status", on ? "● connected" : "○ not connected",
-			     on ? pal::kGreen : pal::kDim);
-			stat(c, ty++, "difficulty",
-			     on ? std::to_string((long)share.difficulty) : "—",
-			     on ? pal::kInk : pal::kDim);
+			std::string sline = live ? client.status_text() : "not connected";
+			stat(c, ty++, "status", (on ? "● " : (live ? "◐ " : "○ ")) + sline,
+			     on ? pal::kGreen
+			        : (st == stratum::State::Failed ? pal::kRed : pal::kDim));
+			const double d = sx.difficulty.load();
+			stat(c, ty++, "difficulty", d > 0 ? std::to_string((long)d) : "—",
+			     d > 0 ? pal::kInk : pal::kDim);
 		}
 
 		const int col2 = c + (w - 6) / 2;
 		if (room(3)) {
 			++ty;
-			stat(c, ty, "accepted", on ? std::to_string(share.accepted) : "—",
-			     on ? pal::kGreen : pal::kDim);
-			stat(col2, ty++, "stale", on ? std::to_string(share.stale) : "—",
-			     on ? pal::kYellow : pal::kDim);
-			stat(c, ty, "rejected", on ? std::to_string(share.rejected) : "—",
-			     on ? pal::kRed : pal::kDim);
+			stat(c, ty, "accepted", std::to_string(sx.accepted.load()),
+			     sx.accepted.load() ? pal::kGreen : pal::kDim);
+			stat(col2, ty++, "stale", std::to_string(sx.stale.load()),
+			     sx.stale.load() ? pal::kYellow : pal::kDim);
+			stat(c, ty, "rejected", std::to_string(sx.rejected.load()),
+			     sx.rejected.load() ? pal::kRed : pal::kDim);
+			const double ls = sx.last_share_time.load();
 			char age[32] = "—";
-			if (share.last_share_s >= 0)
-				snprintf(age, sizeof(age), "%.0fs ago", share.last_share_s);
-			stat(col2, ty++, "last", age, on ? pal::kInk : pal::kDim);
+			if (ls > 0)
+				snprintf(age, sizeof(age), "%.0fs ago", now_wall() - ls);
+			stat(col2, ty++, "last", age, ls > 0 ? pal::kInk : pal::kDim);
 		}
 
-		if (!on && room(2)) {
-			++ty;
-			frame.text(c, ty++, "share stats need the stratum client", pal::kDim);
-		}
-		draw_button(c, btn, w - 6, "Edit pools…", foc, pal::kPurple);
+		const int connect_row = btn - 1;
+		draw_button(c, connect_row, w - 6, live ? "Disconnect" : "Connect",
+		            foc_connect, live ? pal::kRed : pal::kGreen);
+		draw_button(c, btn, w - 6, "Edit pools…", foc_pools, pal::kPurple);
 	}
 
 	void draw_dashboard()
@@ -744,6 +815,29 @@ struct App {
 					engine.start(threads, lanes);
 					status = "running";
 				}
+			} else if (focus == F_CONNECT) {
+				if (client.state() != stratum::State::Disconnected) {
+					client.stop();
+					engine.set_pool(nullptr);
+					if (engine.active())
+						engine.start(threads, lanes);
+					status = "disconnected";
+				} else if (!pools.empty() &&
+				           !pools[(size_t)pool_sel].host.empty()) {
+					const Pool &p = pools[(size_t)pool_sel];
+					stratum::Config cfg;
+					cfg.host = p.host;
+					cfg.port = p.port;
+					cfg.user = p.user;
+					cfg.pass = p.pass;
+					client.start(cfg);
+					engine.set_pool(&client);
+					if (engine.active())
+						engine.start(threads, lanes);
+					status = "connecting";
+				} else {
+					status = "set a host first";
+				}
 			} else if (focus == F_POOLS) {
 				pool_cursor = pool_sel;
 				screen = Screen::Pools;
@@ -795,6 +889,7 @@ struct App {
 			term.present(frame.render());
 		}
 		engine.stop();
+		client.stop();
 		term.end();
 		return 0;
 	}

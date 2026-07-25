@@ -36,9 +36,33 @@ Cores are never dimmed to imply a thread is bound to one: macOS has no
 thread-to-core pinning API, so workers land wherever the scheduler puts them
 and every meter shows real load. The panel says so.
 
-Pools are stored in `~/.config/vh22/pools.conf` at mode 0600. Connecting to
-one needs the stratum client, which does not exist yet, so the run control is
-labelled "Start benchmark" rather than pretending otherwise.
+Pools are stored in `~/.config/vh22/pools.conf` at mode 0600. Select one,
+press Connect, and the run control becomes "Start mining": workers rebuild
+their template on each new job and submit at the pool's target, with accepted,
+stale and rejected counts live in the panel.
+
+## Stratum
+
+`net/` is a Verus PBaaS stratum client with no dependencies -- including its
+own small JSON parser, since the protocol needs objects, arrays, strings and
+numbers nested three deep and that does not justify linking jansson.
+
+The wire format is transcribed from the deployed implementation, and one part
+of it is not guessable: for solution version 7 with a descriptor present, the
+canonical header fields are **not** part of the hashed preimage. Prevhash,
+merkle root, sapling root, nBits and the whole 32-byte nonce are zeroed, and
+the identifying data rides in the solution's nonce space instead. Get it wrong
+and the pool rejects every share without explaining why.
+
+Two words have to travel back with a share exactly where the miner had them,
+or the pool re-derives a different hash: the counting nonce at header word 30
+and the per-worker tag at word 32.
+
+`make stratum-test` runs the client against `tools/mock_pool.py`, a mock pool
+that **validates** what the miner sends rather than accepting it -- submit
+parameter count, nonce length against the extranonce it issued, the fd4005
+CompactSize prefix, hex validity. It also covers the accepted, stale and
+rejected paths so the share accounting is exercised, not just the happy one.
 
 ## Layout
 

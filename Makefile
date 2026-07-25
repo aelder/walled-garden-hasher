@@ -8,7 +8,7 @@ MCPU     ?= native
 OPT      ?= -O3
 CXXFLAGS ?= $(OPT) -mcpu=$(MCPU) -std=c++17 -Wall -Wextra -Wno-unused-parameter \
             -fno-stack-protector -fomit-frame-pointer
-INCLUDES  = -Iinclude -Iref
+INCLUDES  = -Iinclude -Iref -Inet
 DEPFLAGS  = -MMD -MP
 LDFLAGS  ?=
 LDLIBS   ?= -lpthread
@@ -24,7 +24,7 @@ REF_OBJ    = $(REF_SRC:%.cpp=$(BUILD)/%.o)
 BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench $(BUILD)/vh22-sieve-oracle \
            $(BUILD)/vh22-top
 
-.PHONY: all clean test bench disas crosscheck top
+.PHONY: all clean test bench disas crosscheck top stratum-test
 all: $(BINARIES)
 
 $(BUILD)/%.o: %.cpp
@@ -40,8 +40,18 @@ $(BUILD)/vh22-bench: $(BUILD)/tools/bench.o $(ENGINE_OBJ)
 $(BUILD)/vh22-sieve-oracle: $(BUILD)/tools/sieve_oracle.o $(ENGINE_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
+NET_OBJ = $(BUILD)/net/stratum.o
+$(BUILD)/vh22-stratum-test: $(BUILD)/tools/stratum_test.o $(NET_OBJ) $(ENGINE_OBJ)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+
+# Exercises the client against tools/mock_pool.py, which validates the submit
+# framing from the pool side.
+stratum-test: $(BUILD)/vh22-stratum-test
+	@python3 tools/mock_pool.py --port 13956 & \
+	 sleep 1; $(BUILD)/vh22-stratum-test --port 13956; rc=$$?; wait; exit $$rc
+
 UI_OBJ = $(BUILD)/ui/tui.o $(BUILD)/ui/vh22top.o
-$(BUILD)/vh22-top: $(UI_OBJ) $(ENGINE_OBJ)
+$(BUILD)/vh22-top: $(UI_OBJ) $(NET_OBJ) $(ENGINE_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 top: $(BUILD)/vh22-top
