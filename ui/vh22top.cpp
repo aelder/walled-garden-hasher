@@ -475,7 +475,7 @@ struct App {
 	// waterline has reached lights up in that row's fastfetch stripe colour.
 	// Rock in a stream.
 	void draw_watermark(int gx, int gy, int gw, int gh, const std::vector<int> &fill,
-	                    std::vector<uint8_t> &occlude)
+	                    PlotMask &occlude)
 	{
 		const LogoArt *art = nullptr;
 		int lw = 0;
@@ -510,7 +510,7 @@ struct App {
 				const int cx = ox + c - gx, cy = oy + r - gy;
 				if (cx < 0 || cx >= gw || cy < 0 || cy >= gh)
 					continue;
-				occlude[(size_t)cy * (size_t)gw + (size_t)cx] = kDotsAll;
+				occlude.hide[(size_t)cy * (size_t)gw + (size_t)cx] = kDotsAll;
 
 				// Submerged when the fill at this column reaches into this
 				// cell's four dot rows.
@@ -527,7 +527,7 @@ struct App {
 		// the logo are pure braille, and braille has 2x4 subpixels. Dropping
 		// the dot column or row that faces the logo thins the water as it
 		// reaches the rock instead of ending it on a cell boundary.
-		const std::vector<uint8_t> solid = occlude;
+		const std::vector<uint8_t> solid = occlude.hide;
 		auto solid_at = [&](int cx, int cy) {
 			return cx >= 0 && cx < gw && cy >= 0 && cy < gh &&
 			       solid[(size_t)cy * (size_t)gw + (size_t)cx] == kDotsAll;
@@ -537,12 +537,26 @@ struct App {
 				const size_t at = (size_t)cy * (size_t)gw + (size_t)cx;
 				if (solid[at])
 					continue;
+
+				// Dot removal: one row or one column from the facing edge.
+				// Dots are ~square, so this is the same physical step in
+				// either direction.
 				uint8_t f = 0;
 				if (solid_at(cx + 1, cy)) f |= kDotsRight;
 				if (solid_at(cx - 1, cy)) f |= kDotsLeft;
 				if (solid_at(cx, cy + 1)) f |= kDotsBottom;
 				if (solid_at(cx, cy - 1)) f |= kDotsTop;
-				occlude[at] = f;
+				occlude.hide[at] = f;
+
+				// Fade radius: one cell above and below, two to each side.
+				// A cell is about twice as tall as it is wide, so equal cell
+				// counts would put a band twice as thick top and bottom.
+				uint8_t fade = 0;
+				if (f)
+					fade = 140;
+				else if (solid_at(cx + 2, cy) || solid_at(cx - 2, cy))
+					fade = 70;
+				occlude.fade[at] = fade;
 			}
 	}
 
@@ -567,7 +581,8 @@ struct App {
 			frame.put(gx - 1, gy + j, "│", pal::kDim);
 
 		const std::vector<int> fill = plot_fill_dots(gw, gh, hist, vmax);
-		std::vector<uint8_t> occlude((size_t)gw * (size_t)gh, 0);
+		PlotMask occlude;
+		occlude.resize((size_t)gw * (size_t)gh);
 		draw_watermark(gx, gy, gw, gh, fill, occlude);
 		braille_plot(frame, gx, gy, gw, gh, hist, vmax, &occlude);
 

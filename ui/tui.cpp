@@ -204,7 +204,7 @@ std::vector<int> plot_fill_dots(int w, int h, const std::vector<double> &series,
 }
 
 void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
-                  double vmax, const std::vector<uint8_t> *occlude)
+                  double vmax, const PlotMask *occlude)
 {
 	if (w <= 0 || h <= 0)
 		return;
@@ -241,16 +241,18 @@ void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double
 		const Rgb col = pal::kRainbow[band < 6 ? band : 5];
 		for (int cx = 0; cx < w; ++cx) {
 			const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
-			const uint8_t hide =
-				(occlude && at < occlude->size()) ? (*occlude)[at] : 0;
+			const bool have = occlude && at < occlude->hide.size();
+			const uint8_t hide = have ? occlude->hide[at] : 0;
+			const uint8_t fade = have ? occlude->fade[at] : 0;
 			const uint8_t m = (uint8_t)(mask[at] & ~hide);
 			if (!m)
 				continue;
 			char g[5];
 			encode_braille(m, g);
-			// Thinned cells are also dimmed: losing dots alone still reads as
-			// a step, losing brightness with them reads as a shore.
-			f.put(x + cx, y + cy, g, hide ? lerp(pal::kPanel, col, 0.55) : col);
+			// Thinning alone still reads as a step; thinning plus a fade
+			// reads as a shore.
+			f.put(x + cx, y + cy, g,
+			      fade ? lerp(col, pal::kPanel, (double)fade / 255.0) : col);
 		}
 	}
 }

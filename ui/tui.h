@@ -97,13 +97,30 @@ void rainbow_rule(Frame &f, int x, int y, int w);
 // btop-style braille plot: 2x4 dots per cell, coloured by height through the
 // Apple rainbow with green at the top.
 //
-// `occlude`, when given, is a w*h grid of braille *dot* masks, not flags. A
-// cell set to 0xFF is fully hidden; a partial mask hides only those dots, so
-// the boundary can be feathered at 2x4 sub-cell resolution instead of ending
-// on a rectangular staircase. Partially masked cells are also dimmed, which
-// is what turns a hard silhouette into a shoreline.
+// How an occluder eats into the plot, per cell.
+//
+// `hide` is a braille *dot* mask, not a flag: 0xFF removes the cell entirely,
+// a partial mask removes only those dots, so a boundary can be feathered at
+// 2x4 sub-cell resolution instead of ending on a rectangular staircase.
+//
+// `fade` is separate, and has to be, because the two quantise differently.
+// Dots are ~square, so removing one row or one column is the same physical
+// step either way. Fading is per cell, and a cell is about twice as tall as
+// it is wide -- so an equal number of faded cells produces a band twice as
+// thick above and below as it is left and right. `fade` carries its own
+// radius to cancel that.
+struct PlotMask {
+	std::vector<uint8_t> hide;   // dots to drop
+	std::vector<uint8_t> fade;   // 0 none .. 255 fully into the background
+	void resize(size_t n)
+	{
+		hide.assign(n, 0);
+		fade.assign(n, 0);
+	}
+};
+
 void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
-                  double vmax, const std::vector<uint8_t> *occlude = nullptr);
+                  double vmax, const PlotMask *mask = nullptr);
 
 // Braille dot masks for feathering: one dot column or row, on each side.
 enum : uint8_t {
