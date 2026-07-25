@@ -12,6 +12,18 @@
 #include "vh22/arch.h"
 #include "vh22/haraka.h"
 
+// Case 3 branches on `dividend & 1`, a coin flip the bucketed dispatch cannot
+// reach. See the body for the store-order subtlety this has to preserve.
+#ifndef VH22_CASE3_BRANCHLESS
+#define VH22_CASE3_BRANCHLESS 1
+#endif
+
+// Case 6's loop runs 1..8 times, drawn from the top three selector bits, so
+// its exit branch is unpredictable too. See the body.
+#ifndef VH22_CASE6_FIXED
+#define VH22_CASE6_FIXED 0
+#endif
+
 namespace vh22 {
 
 // Per-hash loop invariants. pbuf is the classic pbuf_copy[4]; clprod is the
@@ -114,6 +126,30 @@ VH_INLINE void case3(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 
 	const v128 tempa2 = vxor(mhrs<Exact>(acc, temp1), temp1);
 
+#if VH22_CASE3_BRANCHLESS
+	// `dividend & 1` is a coin flip on cryptographically random data, and the
+	// bucketed dispatch cannot help with a branch *inside* a body. Both sides
+	// are cheap, so compute both and select.
+	//
+	// The two sides do not just differ in value, they store in opposite
+	// orders: the odd side writes prandex then prand, the even side writes
+	// prand then prandex. That is only observable when the two slots are the
+	// same vector, which happens 1 time in 512 -- and then the second store
+	// wins, so the sides disagree about the surviving value. Folding the
+	// alias case into the selected value lets one store order serve both.
+	const v128 temp12 = vload(prandex);
+	const v128 acc_odd =
+		vxor(vxor(vclmul_self(vxor(temp12, k.pbuf[b])), k.clprod[b]), acc);
+	const v128 acc_even = vxor(k.pbuf[b], acc);
+	const v128 tempb2 = vxor(mhrs<Exact>(acc_odd, temp12), temp12);
+
+	const v128 odd = vdupq_n_u8((dividend & 1) ? 0xff : 0x00);
+	const v128 alias = vdupq_n_u8(prand == prandex ? 0xff : 0x00);
+	acc = vbslq_u8(odd, acc_odd, acc_even);
+
+	vstore(prandex, tempa2);
+	vstore(prand, vbslq_u8(odd, tempb2, vbslq_u8(alias, tempa2, temp12)));
+#else
 	if (dividend & 1) {
 		const v128 temp12 = vload(prandex);
 		vstore(prandex, tempa2);
@@ -127,6 +163,7 @@ VH_INLINE void case3(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 		vstore(prandex, tempa2);
 		acc = vxor(k.pbuf[b], acc);
 	}
+#endif
 }
 
 // Three AES2 + MIX2 groups. The round keys are prand[0..11] -- key material,
@@ -175,9 +212,6 @@ VH_INLINE void case5(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
                      v128 *prandex)
 {
 	const int b = base_of(selector);
-	const v128 pb = k.pbuf[b];
-	const v128 pa = k.pbuf[b ^ 1];
-
 	const uint64_t r0 = selector >> 61;  // iterations = r0 + 1, so 1..8
 	const uint64_t n = r0 + 1;
 	const uint64_t field = (selector >> 28) & ((1ULL << n) - 1);
@@ -185,20 +219,24 @@ VH_INLINE void case5(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 	const uint64_t clmask = __builtin_bitreverse64(field) >> (64 - n);
 	const uint64_t aesmask = ~clmask & ((1ULL << n) - 1);
 
+	// Buffer selection is written as an index, not a ternary on two live
+	// vector registers: the parity is data-dependent, and a conditional
+	// select between registers is one more thing for clang to turn into a
+	// branch. `parity ? pbuf[b] : pbuf[b^1]` is just `pbuf[b ^ !parity]`.
 	v128 fold = vzero();
 	for (uint64_t m = clmask; m; m &= (m - 1)) {
 		const uint64_t j = (uint64_t)__builtin_ctzll(m);
-		const v128 temp2 = ((r0 ^ j) & 1) ? pb : pa;
-		fold = vxor(fold, vclmul_self(vxor(prand[j], temp2)));
+		const int parity = (int)((r0 ^ j) & 1);
+		fold = vxor(fold, vclmul_self(vxor(prand[j], k.pbuf[b ^ (parity ^ 1)])));
 	}
 
 	uint64_t keyoff = 1;  // 1 + 4 * (AES ordinal)
 	for (uint64_t m = aesmask; m; m &= (m - 1)) {
 		const uint64_t j = (uint64_t)__builtin_ctzll(m);
+		const int parity = (int)((r0 ^ j) & 1);
 		const v128 *keys = prand + j + keyoff;
 		const v128 onekey = aes2_fused(prand[j], keys[0], keys[2]);
-		const v128 temp2 =
-			aes2_fused(((r0 ^ j) & 1) ? pa : pb, keys[1], keys[3]);
+		const v128 temp2 = aes2_fused(k.pbuf[b ^ parity], keys[1], keys[3]);
 		fold = vxor(fold, vxor(vzip1_32(onekey, temp2), vzip2_32(onekey, temp2)));
 		keyoff += 4;
 	}
@@ -235,8 +273,16 @@ VH_INLINE void case6(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 	// at least 0x18 and cannot be zero.
 	const int32_t divisor = (int32_t)(uint32_t)selector;
 
+	// The trip count is 1..8 drawn from the top three selector bits, so the
+	// loop-exit branch is unpredictable. VH22_CASE6_FIXED trades that for a
+	// constant eight iterations with the surplus ones masked to identity:
+	// mulhrs(x, 0) is exactly 0 and acc ^ 0 is acc, so an inactive iteration
+	// contributes nothing. prand[j] for j <= 7 is always in range.
+	const uint64_t trip = VH22_CASE6_FIXED ? 8 : n;
+
 	v128 onekey = vzero();
-	for (uint64_t j = 0; j < n; ++j) {
+	for (uint64_t j = 0; j < trip; ++j) {
+		const uint64_t live = VH22_CASE6_FIXED ? (j < n) : 1;
 		const uint64_t is_mod = (modmask >> j) & 1;
 		const uint64_t parity = (r0 ^ j) & 1;
 		// The two branches pick opposite buffers for the same parity, so
@@ -248,12 +294,13 @@ VH_INLINE void case6(v128 &acc, uint64_t selector, const StepConst &k, v128 *pra
 		const v128 product = vclmul_self(v);
 
 		const v128 sel = vdupq_n_u8(is_mod ? 0xff : 0x00);
-		const v128 modterm = vandq_u8(modulo, sel);
-		const v128 clterm = vbicq_u8(product, sel);
+		const v128 keep = vdupq_n_u8(live ? 0xff : 0x00);
+		const v128 modterm = vandq_u8(vandq_u8(modulo, sel), keep);
+		const v128 clterm = vandq_u8(vbicq_u8(product, sel), keep);
 
 		const v128 a = vxor(acc, modterm);
 		acc = vxor(a, mhrs<Exact>(a, clterm));
-		onekey = vbslq_u8(sel, v, product);
+		onekey = vbslq_u8(keep, vbslq_u8(sel, v, product), onekey);
 	}
 
 	const v128 tempa3 = vload(prandex);
