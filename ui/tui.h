@@ -115,6 +115,13 @@ int disp_len(const std::string &s);
 void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
                    Rgb lo, Rgb hi);
 
+// Half-block "ANSI block" text. Glyphs are 6x8 pixels drawn two pixels to a
+// cell with the U+2580 half blocks, so a line occupies 4 terminal rows and
+// gets double the vertical resolution the character grid would allow.
+enum : int { kBlockRows = 4, kBlockW = 6, kBlockAdvance = 7 };
+int block_text_width(const std::string &s);
+void block_text(Frame &f, int x, int y, const std::string &s, Rgb fg);
+
 // --- terminal -------------------------------------------------------------
 
 enum class Key {

@@ -473,7 +473,36 @@ struct App {
 		// the same plotting language as the hashrate graph, which solid bars
 		// were not. Colour ramps within the cluster's family so P and E stay
 		// distinguishable while magnitude reads off the ramp.
-		const int rows = h - 6;          // pad, cores, pad, two control rows
+		// Block heading. Sits above the core list and takes kBlockRows.
+		double agg = 0;
+		for (size_t i = 0; i < load.pct.size(); ++i)
+			agg += load.pct[i];
+		if (!load.pct.empty())
+			agg /= (double)load.pct.size();
+		char pctxt[8];
+		snprintf(pctxt, sizeof(pctxt), "%d", (int)(agg * 100 + 0.5));
+
+		const int head_y = y + 1;
+		const int label_end = x + 3 + block_text_width("CPU");
+		block_text(frame, x + 3, head_y, "CPU", pal::kInk);
+
+		// The digits go big and the per-cent sign stays small. Rendering "%"
+		// in the block face costs 7 columns, which is the difference between
+		// "100" fitting and colliding with the label -- and 100 is exactly the
+		// reading this panel shows while mining.
+		const std::string val = pctxt;
+		const Rgb vcol = lerp(pal::kBlue, pal::kGreen, agg);
+		const int vw = block_text_width(val);
+		const int vx = x + w - 4 - vw;
+		if (vx > label_end + 1) {
+			block_text(frame, vx, head_y, val, vcol);
+			frame.text(x + w - 3, head_y + kBlockRows - 1, "%", vcol, pal::kPanel, true);
+		} else {
+			frame.text(x + w - 4 - (int)val.size(), head_y + kBlockRows - 1, val + "%",
+			           vcol, pal::kPanel, true);
+		}
+
+		const int rows = h - 6 - kBlockRows;
 		const int cols = 2;
 		const int per = (sys.ncpu + cols - 1) / cols;
 		const int top_pad = (rows > per) ? (rows - per) / 2 : 0;
@@ -484,7 +513,7 @@ struct App {
 			// slack on a machine with few cores reads as symmetric padding
 			// rather than a gap above the controls.
 			const int cx = x + 3 + (i / per) * cw;
-			const int cy = y + 2 + top_pad + (i % per);
+			const int cy = y + 2 + kBlockRows + top_pad + (i % per);
 			if (i % per >= rows)
 				continue;
 			// Performance cores are listed first even though Apple numbers
@@ -626,7 +655,7 @@ struct App {
 		// Side by side, so both panels take the taller requirement: cores need
 		// pad + rows + pad + spinners + button + pad; the pool panel needs
 		// identity, status, the share grid and its note.
-		const int cores_need = (sys.ncpu + 1) / 2 + 7;
+		const int cores_need = (sys.ncpu + 1) / 2 + 7 + kBlockRows;
 		const int pool_need = 15;
 		int bot = cores_need > pool_need ? cores_need : pool_need;
 		// Reserve a readable graph rather than splitting the remainder evenly:
