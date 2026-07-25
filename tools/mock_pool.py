@@ -127,7 +127,8 @@ class Session(threading.Thread):
                                        "error": [20, "Other/Unknown", None]})
                         else:
                             self.send({"id": mid, "result": good, "error": None})
-                        self.done.set()
+                        if not self.args.persist:
+                            self.done.set()
                     else:
                         self.send({"id": mid, "result": True, "error": None})
         except (ConnectionError, json.JSONDecodeError, OSError):
@@ -141,6 +142,8 @@ def main():
     ap.add_argument("--port", type=int, default=13956)
     ap.add_argument("--solution-version", type=int, default=7)
     ap.add_argument("--reject", choices=["stale", "bad"], default=None)
+    ap.add_argument("--persist", action="store_true",
+                    help="keep serving after the first share, for UI testing")
     ap.add_argument("--timeout", type=float, default=30.0)
     args = ap.parse_args()
 

@@ -14,6 +14,7 @@
 #include <mach/processor_info.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -366,7 +367,35 @@ static const LogoArt kLogoSmall = {7, kLogoSmallRows};
 static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
 enum class Screen { Dashboard, Pools, EditPool };
-enum Focus { F_THREADS = 0, F_LANES, F_RUN, F_CONNECT, F_POOLS, F_COUNT };
+enum Focus { F_THREADS = 0, F_LANES, F_START, F_BENCH, F_CONNECT, F_POOLS, F_COUNT };
+enum class Mode { Idle, Mining, Benchmark };
+
+// The run label animates when mining. Each glyph flips from >START< to
+// !ACTIVE! at its own moment rather than the whole word switching at once,
+// then keeps its own brightness phase so the word never sits still.
+struct GlyphKinetics {
+	static constexpr int kMax = 12;
+	double flip[kMax] = {0};
+	double phase[kMax] = {0};
+	double rate[kMax] = {0};
+	uint64_t seed = 0x2545F4914F6CDD1Dull;
+
+	double next()
+	{
+		seed ^= seed << 13;
+		seed ^= seed >> 7;
+		seed ^= seed << 17;
+		return (double)(seed >> 11) / (double)(1ull << 53);
+	}
+	void begin(double now)
+	{
+		for (int i = 0; i < kMax; ++i) {
+			flip[i] = now + next() * 0.75;     // stagger the flip
+			phase[i] = next() * 6.28318;       // and the shimmer
+			rate[i] = 3.0 + next() * 3.5;
+		}
+	}
+};
 
 struct App {
 	SysInfo sys;
@@ -387,6 +416,8 @@ struct App {
 	double last_t = 0;
 
 	stratum::Client client;
+	Mode mode = Mode::Idle;
+	GlyphKinetics kin;
 	std::vector<Pool> pools;
 	int pool_sel = 0, pool_cursor = 0, field = 0;
 	Pool draft;
@@ -585,14 +616,18 @@ struct App {
 		rx = frame.text(rx, ry, mhs(peak), pal::kYellow, pal::kPanel, true);
 		rx = frame.text(rx + 3, ry, "avg ", pal::kLabel);
 		rx = frame.text(rx, ry, avg_n ? mhs(avg_acc / (double)avg_n) : "0.00", pal::kInk);
-		rx = frame.text(rx + 3, ry, engine.active() ? "● running" : "○ idle",
-		                engine.active() ? pal::kGreen : pal::kDim);
+		const char *what = mode == Mode::Mining     ? "● mining"
+		                 : mode == Mode::Benchmark ? "● benchmark"
+		                                           : "○ idle";
+		rx = frame.text(rx + 3, ry, what,
+		                mode == Mode::Idle ? pal::kDim : pal::kGreen);
 	}
 
 	void draw_cores(int x, int y, int w, int h)
 	{
 		const bool foc = (screen == Screen::Dashboard) &&
-		                 (focus == F_THREADS || focus == F_LANES || focus == F_RUN);
+		                 (focus == F_THREADS || focus == F_LANES ||
+		                  focus == F_START || focus == F_BENCH);
 		window(frame, x, y, w, h, "Cores", foc, pal::kBlue);
 
 		// Two cores per line, each a braille trace of its own recent load --
@@ -636,9 +671,6 @@ struct App {
 		// side so the focus ring has somewhere to go.
 		const int bx = x + 2, bw = w - 4;
 		const int ix = bx + 3, iw = bw - 6;
-		const bool on = engine.active();
-		const bool mining = client.state() == stratum::State::Ready;
-
 		int cy = y + h - 7;
 		draw_spin(ix, cy, iw, "threads", std::to_string(threads), focus == F_THREADS);
 		if (focus == F_THREADS)
@@ -649,11 +681,30 @@ struct App {
 		if (focus == F_LANES)
 			focus_box(bx, cy, bw, pal::kYellow);
 
+		// Start and Benchmark share the row: start mines a pool, benchmark
+		// runs the synthetic template. They are different jobs, so they are
+		// different buttons.
 		cy += 2;
-		draw_button(ix, cy, iw, on ? "Stop" : (mining ? "Start mining" : "Start benchmark"),
-		            focus == F_RUN, on ? pal::kRed : pal::kGreen);
-		if (focus == F_RUN)
-			focus_box(bx, cy, bw, on ? pal::kRed : pal::kGreen);
+		const bool pool_ready = client.state() == stratum::State::Ready;
+		const bool is_mining = mode == Mode::Mining;
+		const bool is_bench = mode == Mode::Benchmark;
+
+		const int start_w = 14;
+		draw_run_label(ix, cy, pool_ready, is_mining, focus == F_START);
+		if (focus == F_START)
+			focus_box(bx, cy, start_w,
+			          is_mining || pool_ready ? pal::kGreen : pal::kDim);
+		if (!pool_ready && !is_mining)
+			frame.text(bx + start_w + 1, cy, "needs a pool", pal::kDim);
+
+		const std::string bl = is_bench ? "Stop" : "Benchmark";
+		const int blen = disp_len(bl);
+		const int box_w = blen + 6;
+		const int box_x = bx + bw - box_w;
+		draw_button(box_x + 3, cy, blen, bl, focus == F_BENCH,
+		            is_bench ? pal::kRed : pal::kYellow);
+		if (focus == F_BENCH)
+			focus_box(box_x, cy, box_w, is_bench ? pal::kRed : pal::kYellow);
 	}
 
 	// System 7 signalled the active control with a ring around it. One row is
@@ -669,6 +720,36 @@ struct App {
 		frame.put(x, y + 1, "╰", col);
 		frame.hline(x + 1, y + 1, w - 2, "─", col);
 		frame.put(x + w - 1, y + 1, "╯", col);
+	}
+
+	// >START< while the pool is ready, !ACTIVE! once mining -- flipped one
+	// glyph at a time on staggered timers, each then shimmering on its own
+	// phase so the word reads as working rather than as a static label.
+	void draw_run_label(int x, int y, bool pool_ready, bool mining, bool foc)
+	{
+		static const char *kReady = ">START<";
+		static const char *kActive = "!ACTIVE!";
+		if (foc)
+			frame.text(x - 2, y, "▸", mining || pool_ready ? pal::kGreen : pal::kDim);
+		if (!pool_ready && !mining) {
+			frame.text(x, y, "start", pal::kDim);
+			return;
+		}
+		if (!mining) {
+			frame.text(x, y, kReady, pal::kGreen, pal::kPanel, true);
+			return;
+		}
+		const double t = now_s();
+		const int n = (int)strlen(kActive);
+		for (int i = 0; i < n; ++i) {
+			const bool flipped = t >= kin.flip[i];
+			const char c = flipped ? kActive[i]
+			                       : (i < (int)strlen(kReady) ? kReady[i] : ' ');
+			const double s = 0.55 + 0.45 * sin(t * kin.rate[i] + kin.phase[i]);
+			const char g[2] = {c, 0};
+			frame.put(x + i, y, g, lerp(lerp(pal::kPanel, pal::kGreen, 0.45),
+			                            pal::kGreen, s), pal::kPanel, true);
+		}
 	}
 
 	void draw_spin(int x, int y, int w, const std::string &label, const std::string &val,
@@ -967,21 +1048,42 @@ struct App {
 		case Key::Left: adjust(-1); break;
 		case Key::Right: adjust(+1); break;
 		case Key::Enter:
-			if (focus == F_RUN) {
-				if (engine.active()) {
+			if (focus == F_START) {
+				if (mode == Mode::Mining) {
 					engine.stop();
+					engine.set_pool(nullptr);
+					mode = Mode::Idle;
+					status = "stopped";
+				} else if (client.state() != stratum::State::Ready) {
+					status = "connect to a pool first";
+				} else {
+					peak = 0; avg_acc = 0; avg_n = 0;
+					engine.set_pool(&client);
+					engine.start(threads, lanes);
+					kin.begin(now_s());
+					mode = Mode::Mining;
+					status = "mining";
+				}
+			} else if (focus == F_BENCH) {
+				if (mode == Mode::Benchmark) {
+					engine.stop();
+					mode = Mode::Idle;
 					status = "stopped";
 				} else {
 					peak = 0; avg_acc = 0; avg_n = 0;
+					engine.set_pool(nullptr);
 					engine.start(threads, lanes);
-					status = "running";
+					mode = Mode::Benchmark;
+					status = "benchmarking";
 				}
 			} else if (focus == F_CONNECT) {
 				if (client.state() != stratum::State::Disconnected) {
 					client.stop();
+					if (mode == Mode::Mining) {
+						engine.stop();
+						mode = Mode::Idle;
+					}
 					engine.set_pool(nullptr);
-					if (engine.active())
-						engine.start(threads, lanes);
 					status = "disconnected";
 				} else if (!pools.empty() &&
 				           !pools[(size_t)pool_sel].host.empty()) {
@@ -992,9 +1094,6 @@ struct App {
 					cfg.user = p.user;
 					cfg.pass = p.pass;
 					client.start(cfg);
-					engine.set_pool(&client);
-					if (engine.active())
-						engine.start(threads, lanes);
 					status = "connecting";
 				} else {
 					status = "set a host first";
