@@ -118,6 +118,11 @@ void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<doubl
 // Half-block "ANSI block" text. Glyphs are 6x8 pixels drawn two pixels to a
 // cell with the U+2580 half blocks, so a line occupies 4 terminal rows and
 // gets double the vertical resolution the character grid would allow.
+//
+// Currently unused. It was fitted as a "CPU" heading over the cores panel and
+// works, but four rows is a lot of vertical budget and the panel reads better
+// without it. Kept because the obvious next home is the hashrate readout,
+// which would want M, H, / and s added to the font.
 enum : int { kBlockRows = 4, kBlockW = 6, kBlockAdvance = 7 };
 int block_text_width(const std::string &s);
 void block_text(Frame &f, int x, int y, const std::string &s, Rgb fg);
