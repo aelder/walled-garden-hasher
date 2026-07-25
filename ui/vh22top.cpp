@@ -510,7 +510,7 @@ struct App {
 				const int cx = ox + c - gx, cy = oy + r - gy;
 				if (cx < 0 || cx >= gw || cy < 0 || cy >= gh)
 					continue;
-				occlude[(size_t)cy * (size_t)gw + (size_t)cx] = 1;
+				occlude[(size_t)cy * (size_t)gw + (size_t)cx] = kDotsAll;
 
 				// Submerged when the fill at this column reaches into this
 				// cell's four dot rows.
@@ -521,6 +521,29 @@ struct App {
 				          wet ? bright : lerp(pal::kPanel, pal::kChrome, 0.55));
 			}
 		}
+
+		// Feather the approach. A cell can hold one glyph, so the logo and the
+		// stream can never blend inside the same cell -- but the cells around
+		// the logo are pure braille, and braille has 2x4 subpixels. Dropping
+		// the dot column or row that faces the logo thins the water as it
+		// reaches the rock instead of ending it on a cell boundary.
+		const std::vector<uint8_t> solid = occlude;
+		auto solid_at = [&](int cx, int cy) {
+			return cx >= 0 && cx < gw && cy >= 0 && cy < gh &&
+			       solid[(size_t)cy * (size_t)gw + (size_t)cx] == kDotsAll;
+		};
+		for (int cy = 0; cy < gh; ++cy)
+			for (int cx = 0; cx < gw; ++cx) {
+				const size_t at = (size_t)cy * (size_t)gw + (size_t)cx;
+				if (solid[at])
+					continue;
+				uint8_t f = 0;
+				if (solid_at(cx + 1, cy)) f |= kDotsRight;
+				if (solid_at(cx - 1, cy)) f |= kDotsLeft;
+				if (solid_at(cx, cy + 1)) f |= kDotsBottom;
+				if (solid_at(cx, cy - 1)) f |= kDotsTop;
+				occlude[at] = f;
+			}
 	}
 
 	void draw_graph(int x, int y, int w, int h)

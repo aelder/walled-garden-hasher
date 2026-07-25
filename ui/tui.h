@@ -97,10 +97,22 @@ void rainbow_rule(Frame &f, int x, int y, int w);
 // btop-style braille plot: 2x4 dots per cell, coloured by height through the
 // Apple rainbow with green at the top.
 //
-// `occlude`, when given, is a w*h byte grid: any cell set is left untouched so
-// a foreground element can stand in the plot rather than under it.
+// `occlude`, when given, is a w*h grid of braille *dot* masks, not flags. A
+// cell set to 0xFF is fully hidden; a partial mask hides only those dots, so
+// the boundary can be feathered at 2x4 sub-cell resolution instead of ending
+// on a rectangular staircase. Partially masked cells are also dimmed, which
+// is what turns a hard silhouette into a shoreline.
 void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
                   double vmax, const std::vector<uint8_t> *occlude = nullptr);
+
+// Braille dot masks for feathering: one dot column or row, on each side.
+enum : uint8_t {
+	kDotsLeft = 0x47,    // col 0, all four rows
+	kDotsRight = 0xB8,   // col 1
+	kDotsTop = 0x09,     // row 0, both columns
+	kDotsBottom = 0xC0,  // row 3
+	kDotsAll = 0xFF,
+};
 
 // Height, in dot rows from the bottom, that the plot fills in each cell
 // column. Lets an occluding element ask whether the stream has reached it.
