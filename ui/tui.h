@@ -96,8 +96,16 @@ void rainbow_rule(Frame &f, int x, int y, int w);
 
 // btop-style braille plot: 2x4 dots per cell, coloured by height through the
 // Apple rainbow with green at the top.
+//
+// `occlude`, when given, is a w*h byte grid: any cell set is left untouched so
+// a foreground element can stand in the plot rather than under it.
 void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
-                  double vmax);
+                  double vmax, const std::vector<uint8_t> *occlude = nullptr);
+
+// Height, in dot rows from the bottom, that the plot fills in each cell
+// column. Lets an occluding element ask whether the stream has reached it.
+std::vector<int> plot_fill_dots(int w, int h, const std::vector<double> &series,
+                                double vmax);
 
 // Horizontal meter. `frac` in [0,1].
 void meter(Frame &f, int x, int y, int w, double frac, Rgb full, Rgb empty = pal::kBar);

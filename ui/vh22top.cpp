@@ -323,6 +323,16 @@ static bool save_pools(const std::vector<Pool> &v, int selected)
 
 // --- app ------------------------------------------------------------------
 
+static const std::string kLogoRows[7] = {
+	"       .:'   ",
+	"    _ :'_    ",
+	" .'`_`-'_``. ",
+	":________.-' ",
+	":_______:    ",
+	" :_______`-; ",
+	"  `._.-._.'  ",
+};
+
 static const char *kLogo[7] = {
 	"       .:'",
 	"    _ :'_",
@@ -428,6 +438,44 @@ struct App {
 			rainbow_rule(frame, x + 2, y + h - 2, w - 4);
 	}
 
+	// The logo stands in the plot rather than under it: its glyphs occlude the
+	// braille, its negative space lets the stream through, and whatever the
+	// waterline has reached lights up in that row's fastfetch stripe colour.
+	// Rock in a stream.
+	void draw_watermark(int gx, int gy, int gw, int gh, const std::vector<int> &fill,
+	                    std::vector<uint8_t> &occlude)
+	{
+		const int lw = 13, lh = 7;
+		if (gw < lw + 4 || gh < lh)
+			return;
+		const int ox = gx + (gw - lw) / 2;
+		const int oy = gy + (gh - lh) / 2;
+		const int dots_h = gh * 4;
+
+		for (int r = 0; r < lh; ++r) {
+			const std::string &row = kLogoRows[r];
+			// fastfetch stripe order: the crown shares green, then the six
+			// bands run down the body.
+			const Rgb bright = pal::kRainbow[r == 0 ? 0 : (r - 1 < 6 ? r - 1 : 5)];
+			for (int c = 0; c < (int)row.size(); ++c) {
+				if (row[c] == ' ')
+					continue;   // water flows through the gaps
+				const int cx = ox + c - gx, cy = oy + r - gy;
+				if (cx < 0 || cx >= gw || cy < 0 || cy >= gh)
+					continue;
+				occlude[(size_t)cy * (size_t)gw + (size_t)cx] = 1;
+
+				// Submerged when the fill at this column reaches into this
+				// cell's four dot rows.
+				const int top_dot = dots_h - fill[(size_t)cx];
+				const bool wet = top_dot <= cy * 4 + 3;
+				const char g[2] = {row[c], 0};
+				frame.put(ox + c, oy + r, g,
+				          wet ? bright : lerp(pal::kPanel, pal::kChrome, 0.55));
+			}
+		}
+	}
+
 	void draw_graph(int x, int y, int w, int h)
 	{
 		const bool foc = false;
@@ -448,7 +496,10 @@ struct App {
 		for (int j = 0; j < gh; ++j)
 			frame.put(gx - 1, gy + j, "│", pal::kDim);
 
-		braille_plot(frame, gx, gy, gw, gh, hist, vmax);
+		const std::vector<int> fill = plot_fill_dots(gw, gh, hist, vmax);
+		std::vector<uint8_t> occlude((size_t)gw * (size_t)gh, 0);
+		draw_watermark(gx, gy, gw, gh, fill, occlude);
+		braille_plot(frame, gx, gy, gw, gh, hist, vmax, &occlude);
 
 		// Readout row.
 		int rx = x + 3;

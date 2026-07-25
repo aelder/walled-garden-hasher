@@ -174,8 +174,37 @@ static void encode_braille(uint8_t mask, char out[5])
 	out[3] = 0;
 }
 
+std::vector<int> plot_fill_dots(int w, int h, const std::vector<double> &series,
+                                double vmax)
+{
+	std::vector<int> fill((size_t)(w > 0 ? w : 0), 0);
+	if (w <= 0 || h <= 0)
+		return fill;
+	if (vmax <= 0)
+		vmax = 1;
+	const int dots_w = w * 2, dots_h = h * 4;
+	const int n = (int)series.size();
+	for (int dx = 0; dx < dots_w; ++dx) {
+		const int idx = n - dots_w + dx;
+		if (idx < 0 || idx >= n)
+			continue;
+		double v = series[(size_t)idx] / vmax;
+		if (v < 0) v = 0;
+		if (v > 1) v = 1;
+		int filled = (int)(v * dots_h + 0.5);
+		if (filled <= 0 && series[(size_t)idx] > 0)
+			filled = 1;
+		// A cell column spans two dot columns; the taller wins, so a glyph
+		// standing there is submerged if either half of it is.
+		const int cx = dx / 2;
+		if (filled > fill[(size_t)cx])
+			fill[(size_t)cx] = filled;
+	}
+	return fill;
+}
+
 void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double> &series,
-                  double vmax)
+                  double vmax, const std::vector<uint8_t> *occlude)
 {
 	if (w <= 0 || h <= 0)
 		return;
@@ -211,7 +240,10 @@ void braille_plot(Frame &f, int x, int y, int w, int h, const std::vector<double
 		const int band = (cy * 6) / h;
 		const Rgb col = pal::kRainbow[band < 6 ? band : 5];
 		for (int cx = 0; cx < w; ++cx) {
-			const uint8_t m = mask[(size_t)cy * (size_t)w + (size_t)cx];
+			const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
+			if (occlude && at < occlude->size() && (*occlude)[at])
+				continue;   // something is standing here
+			const uint8_t m = mask[at];
 			if (!m)
 				continue;
 			char g[5];
