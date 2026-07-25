@@ -58,6 +58,12 @@ PEAK      30.47 MH/s   (best 100 ms window)
 average   29.69 MH/s   (239415296 hashes in 8.06 s)
 ```
 
+Reproduced on a separate quiet run at **30.42 MH/s** peak / 29.59 average --
+0.2% from the above, which is what makes it a number rather than a sample.
+`tools/quiet-peak.sh` runs that protocol: one cold 8 s pass, machine state
+captured either side. It does not repeat the run, because each pass heats the
+part and makes the next peak worse.
+
 The 1 s figure tracking the 100 ms one is what says the peak is an operating
 point and not a scheduling burst caught by a short window. The timeline was
 flat across the full 8 s, so this is short of thermal throttling.
