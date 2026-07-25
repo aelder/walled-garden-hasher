@@ -125,6 +125,53 @@ bucketing it is already predictable loop control, so predication would add
 `BSL` selects to every lane to save a handful of predictable dispatches per
 wave. The measured cost of case-6's speculative work points the same way.
 
+## GPU cost-sieve: measured dead on this engine
+
+The prior campaign's `codex/gpu-nonce-sieve` is a *work-cost* sieve, not a
+share-probability one: the GPU forecasts how expensive each nonce's walk will
+be, and the CPU completes only the cheapest fraction. Every nonce is an equally
+likely ticket, so completing more cheap ones per second is a real gain. It was
+found net-negative on an M2 Max because the 38-core GPU sustained ~40 Mcand/s
+of depth-4 forecasts against a ~76 Mcand/s CPU demand.
+
+`tools/sieve_oracle.cpp` measures the *ceiling* on this engine: the forecast is
+computed on the CPU and not counted against the clock, exactly as if an
+infinitely fast, perfectly accurate GPU had supplied it free. No real sieve can
+beat these numbers.
+
+| forecast depth | keep | per-hash gain | forecasts needed, 10 threads |
+|---|---|---|---|
+| 4 | 0.30 | +3 to +7% | 171 Mcand/s |
+| 8 | 0.30 | +4.6% | 173 Mcand/s |
+| 32 (perfect) | 0.30 | +8.5% | 179 Mcand/s |
+| 32 (perfect) | 0.10 | +18.1% | 588 Mcand/s |
+| 4 | 0.50 | +2.0% | 102 Mcand/s |
+
+Two things moved against it, and this engine caused both.
+
+**The leverage shrank.** A sieve's entire value is the variance of per-nonce
+cost. The cost model weights case 3 at 13 and case 6 at 10 per mod-branch --
+and those were largely *branch mispredict* costs. Case 3 is now branchless and
+case 6 is restructured, so the spread they created is gone. The model still
+predicts the cheapest 30% are 33% below mean cost at depth 4; the measured
+gain is a fifth of that.
+
+**The demand grew.** The engine is ~30% faster per core, so it consumes
+candidates that much faster.
+
+The supply side is not close. A depth-4 forecast is ~1/8 of a full hash, so
+171 Mcand/s is ~21 MH/s of full-hash-equivalent GPU work. The additive Metal
+worker measures the same GPU at ~1.2 MH/s. That is a shortfall of roughly 18x,
+and the M2 Max figures corroborate the model: 40 Mcand/s at depth 4 is ~5 MH/s
+equivalent against a ~3.1 MH/s measured additive worker there.
+
+A CPU-side sieve is worse still: at keep 0.30 each completed hash needs 3.33
+forecasts, so a depth-4 forecast costs 13.3 steps against a 32-step walk --
+about 42% overhead to buy 7%.
+
+The same GPU used *additively* already banks +4-5% on M5 with no orchestration,
+no starvation risk, and no CPU-side complexity. That is where the GPU belongs.
+
 ## A correctness note worth keeping
 
 Upstream's case 4 opens with `const __m128i *rc = prand;`, which **shadows the

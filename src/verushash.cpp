@@ -153,11 +153,19 @@ bool Hasher::finalize(int lane, uint32_t high_target)
 
 uint64_t Hasher::run_wave(uint32_t base, uint32_t high_target)
 {
+	uint32_t nonces[kMaxLanes];
+	for (int l = 0; l < lanes_; ++l)
+		nonces[l] = base + (uint32_t)l;
+	return run_wave_list(nonces, high_target);
+}
+
+uint64_t Hasher::run_wave_list(const uint32_t *nonces, uint32_t high_target)
+{
 	v128 *keys[kMaxLanes];
 	const uint8_t *bufs[kMaxLanes];
 	uint32_t *touched[kMaxLanes];
 	for (int l = 0; l < lanes_; ++l) {
-		prepare(l, base + (uint32_t)l);
+		prepare(l, nonces[l]);
 		keys[l] = keys_[l];
 		bufs[l] = bufs_[l];
 		touched[l] = touched_[l];

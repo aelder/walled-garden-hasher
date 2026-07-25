@@ -21,7 +21,7 @@ REF_SRC    = ref/ref.cpp
 ENGINE_OBJ = $(ENGINE_SRC:%.cpp=$(BUILD)/%.o)
 REF_OBJ    = $(REF_SRC:%.cpp=$(BUILD)/%.o)
 
-BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench
+BINARIES = $(BUILD)/vh22-selftest $(BUILD)/vh22-bench $(BUILD)/vh22-sieve-oracle
 
 .PHONY: all clean test bench disas crosscheck
 all: $(BINARIES)
@@ -34,6 +34,9 @@ $(BUILD)/vh22-selftest: $(BUILD)/tools/selftest.o $(ENGINE_OBJ) $(REF_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD)/vh22-bench: $(BUILD)/tools/bench.o $(ENGINE_OBJ)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/vh22-sieve-oracle: $(BUILD)/tools/sieve_oracle.o $(ENGINE_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 # End-to-end diff against the deployed sse2neon build. Reaches outside the

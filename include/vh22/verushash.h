@@ -65,6 +65,9 @@ public:
 	// Evaluate `lanes()` consecutive nonces from `base`. Returns a bitmask of
 	// lanes whose pre-filter word passed; hash_of(lane) then holds the digest.
 	uint64_t run_wave(uint32_t base, uint32_t high_target);
+	// Same, for an arbitrary list of `lanes()` nonces. Nonce selection is what
+	// a sieve does, so it must not have to be contiguous.
+	uint64_t run_wave_list(const uint32_t *nonces, uint32_t high_target);
 	// Single stream, same semantics, one nonce.
 	bool run_one(uint32_t nonce, uint32_t high_target);
 
