@@ -145,6 +145,11 @@ Rgb lerp(Rgb a, Rgb b, double t);
 // in this UI that matters -- arrows, braille, box drawing -- is multibyte.
 int disp_len(const std::string &s);
 
+// Fit to `cols`, marking the cut with an ellipsis. Clipping at the panel edge
+// instead loses the end of the sentence, and on a status line the end is the
+// part that says what to do about it.
+std::string ellipsize(const std::string &s, int cols);
+
 // A compact braille history trace, for one core per row. Same plotting
 // density as braille_plot, but coloured per column by that column's own value
 // rather than by height -- at one row tall there is only one height band, so

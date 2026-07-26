@@ -271,6 +271,32 @@ int disp_len(const std::string &s)
 	return n;
 }
 
+std::string ellipsize(const std::string &s, int cols)
+{
+	if (cols <= 0)
+		return std::string();
+	if (disp_len(s) <= cols)
+		return s;
+	if (cols == 1)
+		return "…";
+	std::string out;
+	int n = 0;
+	for (size_t i = 0; i < s.size() && n < cols - 1;) {
+		const unsigned char b = (unsigned char)s[i];
+		size_t len = 1;
+		if ((b & 0xE0) == 0xC0) len = 2;
+		else if ((b & 0xF0) == 0xE0) len = 3;
+		else if ((b & 0xF8) == 0xF0) len = 4;
+		if (i + len > s.size())
+			len = 1;
+		out.append(s, i, len);
+		i += len;
+		++n;
+	}
+	out += "…";
+	return out;
+}
+
 Rgb lerp(Rgb a, Rgb b, double t)
 {
 	if (t < 0) t = 0;
