@@ -92,6 +92,21 @@ A one-row news ticker sits between the header and the plot, holding each
 screenful still long enough to read and sliding right to left between them. Its
 copy is `ui/news.md`, read at runtime.
 
+The refresh rate sits on the Cores title bar as `- 100ms +`, stepped with `+`
+and `-`. A repaint is a full screen of cells plus the escape stream to carry
+it, and while the engine holds every core at 100% that competes with the work
+the user started, so the rate follows the engine on its own -- 300 ms busy,
+100 ms idle -- until `+`/`-` takes it over.
+
+Only three rates are offered, because every one has to be a rate the UI looks
+right at. Animation durations are counted in frames rather than seconds, so
+100 and 300 ms are the same motion at different speeds; nothing slower can
+carry motion at all, which is why the bottom of the range is `freeze`, holding
+every graph on its last frame and updating only the hashrate and the share
+counts, every two seconds. Input is never affected: poll() keeps its own short
+timeout and a keystroke repaints immediately, so at any rate the keyboard
+answers in about a millisecond.
+
 Minimum window is 60x19, which is where the dashboard is genuinely drawable;
 below that it says so and names the size you have. The Apple watermark in the
 plot needs about 38 rows, and the full-size one about 49.

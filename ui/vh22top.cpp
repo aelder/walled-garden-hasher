@@ -547,8 +547,33 @@ enum : int { kMinW = 60, kMinH = 19 };
 // slows down and the keyboard does not.
 enum : int { kInputPollMs = 25 };
 static const double kSampleSeconds = 0.10;
-static const double kRedrawIdle = 0.10;
-static const double kRedrawBusy = 0.30;
+
+// The refresh rates on offer, slowest first. There are only three because
+// every one of them has to be a rate the UI actually looks right at, and the
+// gap between them is what makes that true: animation durations are counted in
+// frames, so 100 and 300 ms are the same motion at different speeds. Anything
+// slower than 300 ms cannot carry motion at all, which is why the bottom of
+// the range stops animating rather than animating badly.
+enum class Rate { Freeze = 0, Slow = 1, Normal = 2 };
+enum : int { kRateCount = 3 };
+
+static double rate_period(Rate r)
+{
+	switch (r) {
+	case Rate::Freeze: return 2.00;
+	case Rate::Slow:   return 0.30;
+	default:           return 0.10;
+	}
+}
+
+static const char *rate_label(Rate r)
+{
+	switch (r) {
+	case Rate::Freeze: return "freeze";
+	case Rate::Slow:   return "300ms";
+	default:           return "100ms";
+	}
+}
 
 enum class Screen { Dashboard, Pools, EditPool, Setup };
 enum Focus { F_THREADS = 0, F_LANES, F_BENCH, F_MINE, F_POOLS, F_COUNT };
@@ -750,10 +775,33 @@ struct App {
 
 	bool pool_ready() const { return client.state() == stratum::State::Ready; }
 
-	// Slow while the engine owns the cores, whether that is mining or a
-	// benchmark -- a benchmark wants the cycles even more, since the number it
-	// prints is the point.
-	double redraw_period() const { return engine.active() ? kRedrawBusy : kRedrawIdle; }
+	// The refresh rate, and whether the user has taken it over. Until they
+	// touch +/- it tracks the engine on its own -- slow while the cores are
+	// busy, whether that is mining or a benchmark, since a benchmark wants the
+	// cycles even more than mining does. The first press makes it theirs and
+	// it stops moving underneath them.
+	Rate refresh = Rate::Normal;
+	bool refresh_pinned = false;
+
+	double redraw_period() const { return rate_period(refresh); }
+
+	// At the bottom of the range nothing that moves is drawn at all. Two
+	// seconds cannot carry motion, so the graphs hold their last frame and
+	// only the numbers keep coming.
+	bool frozen() const { return refresh == Rate::Freeze; }
+
+	void nudge_rate(int dir)
+	{
+		int v = (int)refresh + dir;
+		if (v < 0) v = 0;
+		if (v >= kRateCount) v = kRateCount - 1;
+		if ((Rate)v == refresh && refresh_pinned)
+			return;
+		refresh = (Rate)v;
+		refresh_pinned = true;
+		note(std::string("refresh ") + rate_label(refresh) +
+		     (frozen() ? " — graphs held, shares and hashrate only" : ""));
+	}
 
 	// Animation durations are expressed in frames, not seconds, so motion
 	// stays smooth at whatever rate we happen to be repainting at. A sweep
@@ -884,6 +932,11 @@ struct App {
 
 	void tick()
 	{
+		// Until the user takes it over with +/-, the refresh rate follows the
+		// engine on its own.
+		if (!refresh_pinned)
+			refresh = engine.active() ? Rate::Slow : Rate::Normal;
+
 		const double t = now_s();
 		const uint64_t h = g_hashes.load(std::memory_order_relaxed);
 		const double dt = t - last_t;
@@ -892,10 +945,15 @@ struct App {
 			last_hashes = h;
 			last_t = t;
 			if (engine.active()) {
-				// The plot always tells the truth, including the drop to zero
-				// when the pool goes away -- that dip is the signal.
-				hist.erase(hist.begin());
-				hist.push_back(rate);
+				// Frozen holds every graph on its last frame. Hashrate and the
+				// share counts are numbers rather than motion, so they carry
+				// on -- which is the whole point of a setting this slow.
+				if (!frozen()) {
+					// The plot always tells the truth, including the drop to
+					// zero when the pool goes away -- that dip is the signal.
+					hist.erase(hist.begin());
+					hist.push_back(rate);
+				}
 				if (rate > peak)
 					peak = rate;
 				// The average describes how fast this machine hashes, so only
@@ -907,7 +965,9 @@ struct App {
 				}
 			}
 		}
-		load.sample(sys.ncpu);
+		// The per-core meters are graphs too, so they hold as well.
+		if (!frozen())
+			load.sample(sys.ncpu);
 
 		// Restarting the clock rather than merely gating it means the burst
 		// replays every time work resumes, so a pool that drops and comes back
@@ -1009,7 +1069,7 @@ struct App {
 		// to cancel. Using c + r instead lays the band over at roughly 27
 		// degrees on screen, which reads as horizontal drift rather than as a
 		// glint travelling across a surface.
-		const bool gloss = gloss_t0 >= 0;
+		const bool gloss = gloss_t0 >= 0 && !frozen();
 		const double span = (double)lw + 2.0 * (double)art->rows;
 		const double gwidth = 4.0 + span * 0.10;
 		double head = 0;
@@ -1165,6 +1225,25 @@ struct App {
 		                 (focus == F_THREADS || focus == F_LANES || focus == F_BENCH);
 		window(frame, x, y, w, h, "Cores", foc, pal::kBlue);
 
+		// Refresh rate, on the chrome rather than in the focus order: it is a
+		// property of the whole view, not of this panel, and putting it in the
+		// tab ring would mean passing through it to reach the controls that
+		// actually mine. The signs dim at the ends of the range, so the control
+		// says where it stops without having to be pressed to find out.
+		{
+			const std::string label = rate_label(refresh);
+			const int rw = disp_len(label) + 4;   // "-", space, label, space, "+"
+			const int rx = x + w - rw - 2;
+			if (rx > x + 8) {
+				int c = rx;
+				c = frame.text(c, y, "-", frozen() ? pal::kDim : pal::kBlue);
+				c = frame.text(c, y, " " + label + " ",
+				               frozen() ? pal::kYellow : pal::kInk, pal::kPanel, true);
+				frame.text(c, y, "+",
+				           refresh == Rate::Normal ? pal::kDim : pal::kBlue);
+			}
+		}
+
 		// Two cores per line, each a braille trace of its own recent load --
 		// the same plotting language as the hashrate graph, which solid bars
 		// were not. Colour ramps within the cluster's family so P and E stay
@@ -1299,7 +1378,10 @@ struct App {
 			frame.put(x + i, y, g, lerp(lerp(pal::kPanel, pal::kGreen, 0.45),
 			                            pal::kGreen, s), pal::kPanel, true);
 		}
-		dust.step(t, kRedrawIdle / redraw_period());
+		// Held at the frozen rate along with everything else that moves; the
+		// dust still renders, it just stops falling.
+		if (!frozen())
+			dust.step(t, rate_period(Rate::Normal) / redraw_period());
 		dust.render(frame, x + n + 1, y, lerp(pal::kPanel, pal::kGreen, 0.75));
 	}
 
@@ -1512,7 +1594,7 @@ struct App {
 		const int lw = W / 2;
 		draw_cores(0, y, lw, bot);
 		draw_pool_panel(lw, y, W - lw, bot);
-		help(" ↑↓ move   ←→ adjust   ⏎ select   i address   q quit ");
+		help(" ↑↓ move   ←→ adjust   ⏎ select   +- refresh   i address   q quit ");
 	}
 
 	// Pick a pool. That is the whole screen: the wallet is already known, so
@@ -1994,6 +2076,12 @@ struct App {
 				form_err.clear();
 				screen = Screen::Setup;
 			}
+			// '=' is '+' without the shift, which is the key people actually
+			// hit for this.
+			if (e.ch == '+' || e.ch == '=')
+				nudge_rate(+1);
+			if (e.ch == '-' || e.ch == '_')
+				nudge_rate(-1);
 			break;
 		case Key::Quit: return false;
 		default: break;
@@ -2089,6 +2177,7 @@ static void usage(FILE *f)
 	        "  ↑↓      move between controls\n"
 	        "  ←→      adjust threads and lanes\n"
 	        "  ⏎       select, or start and stop\n"
+	        "  + -     refresh rate: 100ms, 300ms, freeze\n"
 	        "  i       set the payout address\n"
 	        "  q       quit\n"
 	        "\n"
