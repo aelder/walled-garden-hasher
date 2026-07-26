@@ -346,54 +346,130 @@ void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<doubl
 		}
 }
 
-void Ticker::build(const std::vector<std::string> &items, int min_cols)
+static std::vector<std::string> decode_glyphs(const std::string &s)
 {
-	glyph.clear();
-	colour.clear();
-	if (items.empty())
+	std::vector<std::string> g;
+	for (size_t i = 0; i < s.size();) {
+		const unsigned char b = (unsigned char)s[i];
+		size_t len = 1;
+		if ((b & 0xE0) == 0xC0) len = 2;
+		else if ((b & 0xF0) == 0xE0) len = 3;
+		else if ((b & 0xF8) == 0xF0) len = 4;
+		if (i + len > s.size())
+			len = 1;
+		g.push_back(s.substr(i, len));
+		i += len;
+	}
+	return g;
+}
+
+double Ticker::dwell_for(int cols)
+{
+	// Prose reads at about 200 words a minute, which is roughly 16 columns a
+	// second; 13 leaves headroom for someone who is watching the hashrate and
+	// only glances up. The constant on the front is the beat it takes to
+	// notice the line has changed at all and find the start of it.
+	double d = 3.5 + (double)cols / 13.0;
+	if (d < 5.0) d = 5.0;
+	if (d > 14.0) d = 14.0;
+	return d;
+}
+
+void Ticker::build(const std::vector<std::string> &items, int cols)
+{
+	page.clear();
+	if (items.empty() || cols <= 0)
 		return;
 
-	auto push = [&](const std::string &s, Rgb c) {
-		for (size_t i = 0; i < s.size();) {
-			const unsigned char b = (unsigned char)s[i];
-			size_t len = 1;
-			if ((b & 0xE0) == 0xC0) len = 2;
-			else if ((b & 0xF0) == 0xE0) len = 3;
-			else if ((b & 0xF8) == 0xF0) len = 4;
-			if (i + len > s.size())
-				len = 1;
-			glyph.push_back(s.substr(i, len));
-			colour.push_back(c);
-			i += len;
-		}
-	};
-
 	for (size_t k = 0; k < items.size(); ++k) {
-		push(items[k], pal::kInk);
-		// The separator takes the next logo stripe, so a run of headlines is
-		// still visibly part of this UI rather than a scrolling paragraph.
-		push("   ", pal::kInk);
-		push("◆", pal::kRainbow[k % 6]);
-		push("   ", pal::kInk);
-	}
-	while ((int)glyph.size() < min_cols + 8) {
-		glyph.push_back(" ");
-		colour.push_back(pal::kInk);
+		// The marker takes the next logo stripe, so the start of a headline is
+		// visible even when the one before it paged.
+		const std::vector<std::string> g = decode_glyphs("◆ " + items[k]);
+		size_t pos = 0;
+		while (pos < g.size()) {
+			size_t take = g.size() - pos;
+			if (take > (size_t)cols) {
+				take = (size_t)cols;
+				// Back off to a word boundary rather than cutting a word in
+				// half across two screens, which is unreadable in a way that
+				// a slightly short line is not.
+				size_t b = take;
+				while (b > 0 && g[pos + b] != " ")
+					--b;
+				if (b > (size_t)cols / 3)
+					take = b;
+			}
+			Page pg;
+			for (size_t i = 0; i < take; ++i) {
+				pg.glyph.push_back(g[pos + i]);
+				pg.colour.push_back(g[pos + i] == "◆" ? pal::kRainbow[k % 6]
+				                                      : pal::kInk);
+			}
+			pg.dwell = dwell_for((int)take);
+			page.push_back(pg);
+			pos += take;
+			while (pos < g.size() && g[pos] == " ")
+				++pos;
+		}
 	}
 }
 
-void marquee(Frame &f, int x, int y, int w, const Ticker &t, double offset)
+double Ticker::cycle() const
+{
+	double total = 0;
+	// A single page has nowhere to slide to, so it simply stays put rather
+	// than wiping itself off and back on for no reason.
+	const double s = page.size() > 1 ? slide : 0.0;
+	for (const auto &p : page)
+		total += p.dwell + s;
+	return total;
+}
+
+static void draw_page(Frame &f, int px, int y, const Ticker::Page &p, int x0, int x1)
+{
+	for (size_t k = 0; k < p.glyph.size(); ++k) {
+		const int cx = px + (int)k;
+		if (cx < x0 || cx >= x1)
+			continue;
+		f.put(cx, y, p.glyph[k].c_str(), p.colour[k]);
+	}
+}
+
+void marquee(Frame &f, int x, int y, int w, const Ticker &t, double elapsed)
 {
 	if (t.empty() || w <= 0)
 		return;
-	const int n = (int)t.glyph.size();
-	int base = (int)fmod(offset, (double)n);
-	if (base < 0)
-		base += n;
-	for (int i = 0; i < w; ++i) {
-		const int k = (base + i) % n;
-		f.put(x + i, y, t.glyph[(size_t)k].c_str(), t.colour[(size_t)k]);
+	const double cyc = t.cycle();
+	if (cyc <= 0)
+		return;
+	const double slide = t.page.size() > 1 ? t.slide : 0.0;
+
+	double u = fmod(elapsed, cyc);
+	if (u < 0)
+		u += cyc;
+	size_t i = 0;
+	for (; i + 1 < t.page.size(); ++i) {
+		const double span = t.page[i].dwell + slide;
+		if (u < span)
+			break;
+		u -= span;
 	}
+	const Ticker::Page &cur = t.page[i];
+
+	if (slide <= 0 || u < cur.dwell) {
+		draw_page(f, x, y, cur, x, x + w);
+		return;
+	}
+
+	// Smoothstep, so the line eases out and settles rather than jerking to a
+	// stop -- at one row the arrival is most of what the eye sees.
+	double p = (u - cur.dwell) / slide;
+	if (p > 1) p = 1;
+	p = p * p * (3.0 - 2.0 * p);
+	const int shift = (int)(p * w + 0.5);
+	const Ticker::Page &next = t.page[(i + 1) % t.page.size()];
+	draw_page(f, x - shift, y, cur, x, x + w);
+	draw_page(f, x + w - shift, y, next, x, x + w);
 }
 
 void meter(Frame &f, int x, int y, int w, double frac, Rgb full, Rgb empty)

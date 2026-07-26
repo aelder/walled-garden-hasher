@@ -694,8 +694,7 @@ struct App {
 			news.build(news_items, w);
 			news_w = w;
 		}
-		// About ten seconds for a glyph to cross, whatever the window is wide.
-		marquee(frame, x, y, w, news, (now_s() - news_t0) * ((double)w / 10.0));
+		marquee(frame, x, y, w, news, now_s() - news_t0);
 	}
 
 	// The transient line in the bottom bar. It expires, because a message that

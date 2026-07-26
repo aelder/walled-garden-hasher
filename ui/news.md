@@ -7,8 +7,12 @@ One headline per `- ` bullet, under `## live`. Bullets anywhere else in the
 file are ignored, so notes and anything parked under `## spiked` cost nothing.
 
 House style, so the ticker matches the rest of the UI: an em dash `—` for the
-aside, never a spaced hyphen; one sentence, short enough to read in a single
-pass at about ten seconds a screen; present tense, straight face.
+aside, never a spaced hyphen; one sentence; present tense, straight face.
+
+Length is not a constraint — a headline wider than the window is split at a
+word boundary and held a screen at a time, rather than truncated. It is still
+worth landing the joke on the first screen where you can, since that is the one
+someone glancing up will read.
 
 Read at runtime, so editing this file and relaunching is enough — no rebuild.
 It is looked for in `$VH22_NEWS`, then `~/.config/vh22/news.md`, then

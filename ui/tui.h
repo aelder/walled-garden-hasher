@@ -150,26 +150,44 @@ int disp_len(const std::string &s);
 // part that says what to do about it.
 std::string ellipsize(const std::string &s, int cols);
 
-// A one-row news ticker.
+// A one-row news ticker: each screenful is held still long enough to read,
+// then slides right to left to the next.
 //
-// The copy is decoded to one entry per column once, at build time rather than
-// per frame: the headlines are full of em dashes, and indexing a scroll offset
-// into raw bytes would slice them in half and desynchronise the whole line.
+// It does not scroll continuously, and slowing a continuous scroll down would
+// have made it worse rather than better. A character grid can only move in
+// whole columns, so a slow scroll is a visible lurch every few hundred
+// milliseconds where a fast one blurs into motion -- and either way reading
+// works by fixating on the text, which is exactly what a line that never stops
+// moving will not allow. Confining the movement to the transitions keeps the
+// character of a marquee and lets the copy be read.
+//
+// The copy is decoded to one entry per column at build time rather than per
+// frame: the headlines are full of em dashes, and indexing columns into raw
+// bytes would slice them in half.
 struct Ticker {
-	std::vector<std::string> glyph;
-	std::vector<Rgb> colour;
+	struct Page {
+		std::vector<std::string> glyph;
+		std::vector<Rgb> colour;
+		double dwell = 6.0;   // seconds held still
+	};
+	std::vector<Page> page;
+	double slide = 0.6;       // seconds of transition between pages
 
-	// Joins the items with a separator and pads the loop out to at least
-	// `min_cols`, so a list shorter than the screen cannot meet its own tail
-	// and appear on it twice at once.
-	void build(const std::vector<std::string> &items, int min_cols);
-	bool empty() const { return glyph.empty(); }
+	// Splits each item into screenfuls at word boundaries, so a headline
+	// longer than the window is paged rather than truncated or scrolled.
+	void build(const std::vector<std::string> &items, int cols);
+	bool empty() const { return page.empty(); }
+	double cycle() const;   // seconds for the whole list
+
+	// A headline reads at roughly this many columns a second; the rest is the
+	// beat needed to notice the line has changed at all.
+	static double dwell_for(int cols);
 };
 
-// `offset` is columns scrolled, and wraps -- the caller can let it grow without
-// bound and derive it from elapsed time, so a stalled frame does not lose the
-// ticker's place.
-void marquee(Frame &f, int x, int y, int w, const Ticker &t, double offset);
+// `elapsed` is seconds since the ticker started, and wraps -- the caller can
+// let it grow without bound and take it from a clock, so a stalled frame does
+// not lose the ticker's place.
+void marquee(Frame &f, int x, int y, int w, const Ticker &t, double elapsed);
 
 // A compact braille history trace, for one core per row. Same plotting
 // density as braille_plot, but coloured per column by that column's own value
