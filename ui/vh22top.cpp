@@ -455,8 +455,83 @@ static const LogoArt kLogoSmall = {7, kLogoSmallRows};
 static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
 enum class Screen { Dashboard, Pools, EditPool, Setup };
-enum Focus { F_THREADS = 0, F_LANES, F_START, F_BENCH, F_CONNECT, F_POOLS, F_COUNT };
+enum Focus { F_THREADS = 0, F_LANES, F_BENCH, F_MINE, F_POOLS, F_COUNT };
 enum class Mode { Idle, Mining, Benchmark };
+
+// Three braille cells of falling material beside the MINING label. Dust is a
+// single dot, clumps are short vertical runs; both fall through the 6x4 dot
+// grid the cells provide and respawn at the top. It is the only part of the
+// UI that says "work is happening" without reporting a number.
+struct Dust {
+	enum : int { kCells = 3, kCols = kCells * 2, kRows = 4, kMax = 16 };
+	struct P {
+		int col;
+		double y, v;
+		int len;
+	};
+	P p[kMax];
+	double last = 0;
+	uint64_t seed = 0x9E3779B97F4A7C15ull;
+	bool live = false;
+
+	double rnd()
+	{
+		seed ^= seed << 13;
+		seed ^= seed >> 7;
+		seed ^= seed << 17;
+		return (double)(seed >> 11) / (double)(1ull << 53);
+	}
+	void spawn(P &q, bool anywhere)
+	{
+		q.col = (int)(rnd() * kCols) % kCols;
+		q.y = anywhere ? rnd() * kRows : -rnd() * 2.0;
+		q.v = 3.0 + rnd() * 9.0;              // dust falls fast, clumps slow
+		q.len = rnd() < 0.25 ? 2 + (int)(rnd() * 2) : 1;
+		if (q.len > 1)
+			q.v *= 0.55;
+	}
+	void begin(double now)
+	{
+		for (auto &q : p)
+			spawn(q, true);
+		last = now;
+		live = true;
+	}
+	void step(double now)
+	{
+		if (!live) { begin(now); return; }
+		double dt = now - last;
+		last = now;
+		if (dt > 0.25) dt = 0.25;             // a stall must not teleport it
+		for (auto &q : p) {
+			q.y += q.v * dt;
+			if (q.y - q.len > kRows)
+				spawn(q, false);
+		}
+	}
+	// Braille dot bits: column 0 rows 0-3, then column 1.
+	void render(Frame &f, int x, int y, Rgb col) const
+	{
+		static const uint8_t kBit[2][4] = {{0x01, 0x02, 0x04, 0x40},
+		                                   {0x08, 0x10, 0x20, 0x80}};
+		uint8_t mask[kCells] = {0, 0, 0};
+		for (const auto &q : p)
+			for (int k = 0; k < q.len; ++k) {
+				const int row = (int)(q.y) - k;
+				if (row < 0 || row >= kRows)
+					continue;
+				mask[q.col / 2] |= kBit[q.col % 2][row];
+			}
+		for (int c = 0; c < kCells; ++c) {
+			if (!mask[c])
+				continue;
+			const unsigned cp = 0x2800u + mask[c];
+			char g[4] = {(char)(0xE0 | (cp >> 12)), (char)(0x80 | ((cp >> 6) & 0x3F)),
+			             (char)(0x80 | (cp & 0x3F)), 0};
+			f.put(x + c, y, g, col);
+		}
+	}
+};
 
 // The run label animates when mining. Each glyph flips from >START< to
 // !ACTIVE! at its own moment rather than the whole word switching at once,
@@ -506,6 +581,7 @@ struct App {
 	stratum::Client client;
 	Mode mode = Mode::Idle;
 	GlyphKinetics kin;
+	Dust dust;
 	Settings cfg;
 	int pool_cursor = 0, field = 0;
 	Pool draft;
@@ -726,8 +802,7 @@ struct App {
 	void draw_cores(int x, int y, int w, int h)
 	{
 		const bool foc = (screen == Screen::Dashboard) &&
-		                 (focus == F_THREADS || focus == F_LANES ||
-		                  focus == F_START || focus == F_BENCH);
+		                 (focus == F_THREADS || focus == F_LANES || focus == F_BENCH);
 		window(frame, x, y, w, h, "Cores", foc, pal::kBlue);
 
 		// Two cores per line, each a braille trace of its own recent load --
@@ -781,30 +856,14 @@ struct App {
 		if (focus == F_LANES)
 			focus_box(bx, cy, bw, pal::kYellow);
 
-		// Start and Benchmark share the row: start mines a pool, benchmark
-		// runs the synthetic template. They are different jobs, so they are
-		// different buttons.
+		// Benchmark belongs with the cores: it is the synthetic run, nothing
+		// to do with a pool.
 		cy += 2;
-		const bool pool_ready = client.state() == stratum::State::Ready;
-		const bool is_mining = mode == Mode::Mining;
 		const bool is_bench = mode == Mode::Benchmark;
-
-		const int start_w = 14;
-		draw_run_label(ix, cy, pool_ready, is_mining, focus == F_START);
-		if (focus == F_START)
-			focus_box(bx, cy, start_w,
-			          is_mining || pool_ready ? pal::kGreen : pal::kDim);
-		if (!pool_ready && !is_mining)
-			frame.text(bx + start_w + 1, cy, "needs a pool", pal::kDim);
-
-		const std::string bl = is_bench ? "Stop" : "Benchmark";
-		const int blen = disp_len(bl);
-		const int box_w = blen + 6;
-		const int box_x = bx + bw - box_w;
-		draw_button(box_x + 3, cy, blen, bl, focus == F_BENCH,
-		            is_bench ? pal::kRed : pal::kYellow);
+		draw_button(ix, cy, iw, is_bench ? "Stop benchmark" : "Benchmark",
+		            focus == F_BENCH, is_bench ? pal::kRed : pal::kYellow);
 		if (focus == F_BENCH)
-			focus_box(box_x, cy, box_w, is_bench ? pal::kRed : pal::kYellow);
+			focus_box(bx, cy, bw, is_bench ? pal::kRed : pal::kYellow);
 	}
 
 	// System 7 signalled the active control with a ring around it. One row is
@@ -827,12 +886,13 @@ struct App {
 	// phase so the word reads as working rather than as a static label.
 	void draw_run_label(int x, int y, bool pool_ready, bool mining, bool foc)
 	{
-		static const char *kReady = ">START<";
-		static const char *kActive = "!ACTIVE!";
+		static const char *kReady = ">MINE<";
+		static const char *kActive = "!MINING!";
 		if (foc)
 			frame.text(x - 2, y, "▸", mining || pool_ready ? pal::kGreen : pal::kDim);
 		if (!pool_ready && !mining) {
-			frame.text(x, y, "start", pal::kDim);
+			frame.text(x, y, "mine", pal::kDim);
+			frame.text(x + 6, y, "(select a pool)", pal::kDim);
 			return;
 		}
 		if (!mining) {
@@ -850,6 +910,8 @@ struct App {
 			frame.put(x + i, y, g, lerp(lerp(pal::kPanel, pal::kGreen, 0.45),
 			                            pal::kGreen, s), pal::kPanel, true);
 		}
+		dust.step(t);
+		dust.render(frame, x + n + 1, y, lerp(pal::kPanel, pal::kGreen, 0.75));
 	}
 
 	void draw_spin(int x, int y, int w, const std::string &label, const std::string &val,
@@ -887,8 +949,8 @@ struct App {
 	void draw_pool_panel(int x, int y, int w, int h)
 	{
 		const bool foc_pools = (screen == Screen::Dashboard) && focus == F_POOLS;
-		const bool foc_connect = (screen == Screen::Dashboard) && focus == F_CONNECT;
-		const bool foc = foc_pools || foc_connect;
+		const bool foc_mine = (screen == Screen::Dashboard) && focus == F_MINE;
+		const bool foc = foc_pools || foc_mine;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
 		const int c = x + 3;
 		const int btn = y + h - 3;
@@ -915,7 +977,12 @@ struct App {
 		auto &sx = client.stats();
 		if (room(3)) {
 			++ty;
-			std::string sline = live ? client.status_text() : "not connected";
+			// "verified" is the useful word here: the pool answered, gave a
+			// target and gave work, so it is known good before mining starts.
+			std::string sline = mode == Mode::Mining ? "mining"
+			                    : on                 ? "verified"
+			                    : live               ? "connecting"
+			                                         : "not connected";
 			stat(c, ty++, "status", (on ? "● " : (live ? "◐ " : "○ ")) + sline,
 			     on ? pal::kGreen
 			        : (st == stratum::State::Failed ? pal::kRed : pal::kDim));
@@ -942,11 +1009,12 @@ struct App {
 
 		const int bx = x + 2, bw = w - 4;
 		const int ix = bx + 3;
-		const int connect_row = btn - 2;
-		draw_button(ix, connect_row, bw - 6, live ? "Disconnect" : "Connect", foc_connect,
-		            live ? pal::kRed : pal::kGreen);
-		if (foc_connect)
-			focus_box(bx, connect_row, bw, live ? pal::kRed : pal::kGreen);
+		const int mine_row = btn - 2;
+		const bool verified = st == stratum::State::Ready;
+		draw_run_label(ix, mine_row, verified, mode == Mode::Mining, foc_mine);
+		if (foc_mine)
+			focus_box(bx, mine_row, bw,
+			          mode == Mode::Mining || verified ? pal::kGreen : pal::kDim);
 		draw_button(ix, btn, bw - 6, "Change pool…", foc_pools, pal::kPurple);
 		if (foc_pools)
 			focus_box(bx, btn, bw, pal::kPurple);
@@ -1171,11 +1239,38 @@ struct App {
 				if (pool_cursor + 1 < (int)cfg.pools.size()) ++pool_cursor;
 				break;
 			case Key::Enter:
-				// Selecting is the common case, so it is the plain key.
+				// Selecting is the common case, so it is the plain key -- and
+				// it tests the pool rather than leaving that to a second
+				// button. By the time you are back on the dashboard the
+				// status says whether the endpoint is any good.
 				if (!cfg.pools.empty()) {
 					cfg.selected = pool_cursor;
 					save_settings(cfg);
-					status = "pool set";
+					if (mode == Mode::Mining) {
+						engine.stop();
+						engine.set_pool(nullptr);
+						mode = Mode::Idle;
+					}
+					client.stop();
+					if (!cfg.id.complete()) {
+						id_draft = cfg.id;
+						field = 0;
+						screen = Screen::Setup;
+						status = "set your address first";
+						break;
+					}
+					const Pool &p = cfg.pools[(size_t)cfg.selected];
+					if (p.host.empty()) {
+						status = "that pool has no host";
+					} else {
+						stratum::Config sc;
+						sc.host = p.host;
+						sc.port = p.port;
+						sc.user = cfg.id.user();
+						sc.pass = "x";
+						client.start(sc);
+						status = "connecting";
+					}
 					screen = Screen::Dashboard;
 				}
 				break;
@@ -1219,20 +1314,21 @@ struct App {
 		case Key::Left: adjust(-1); break;
 		case Key::Right: adjust(+1); break;
 		case Key::Enter:
-			if (focus == F_START) {
+			if (focus == F_MINE) {
 				if (mode == Mode::Mining) {
 					engine.stop();
 					engine.set_pool(nullptr);
 					mode = Mode::Idle;
 					status = "stopped";
 				} else if (client.state() != stratum::State::Ready) {
-					status = "connect to a pool first";
+					status = "pool not verified yet";
 				} else {
 					peak = 0; avg_acc = 0; avg_n = 0;
 					engine.set_pool(&client);
 					engine.start(threads, lanes);
 					kin.begin(now_s());
 					mode = Mode::Mining;
+					dust.begin(now_s());
 					status = "mining";
 				}
 			} else if (focus == F_BENCH) {
@@ -1246,33 +1342,6 @@ struct App {
 					engine.start(threads, lanes);
 					mode = Mode::Benchmark;
 					status = "benchmarking";
-				}
-			} else if (focus == F_CONNECT) {
-				if (client.state() != stratum::State::Disconnected) {
-					client.stop();
-					if (mode == Mode::Mining) {
-						engine.stop();
-						mode = Mode::Idle;
-					}
-					engine.set_pool(nullptr);
-					status = "disconnected";
-				} else if (!cfg.id.complete()) {
-					id_draft = cfg.id;
-					field = 0;
-					screen = Screen::Setup;
-					status = "set your address first";
-				} else if (!cfg.pools.empty() &&
-				           !cfg.pools[(size_t)cfg.selected].host.empty()) {
-					const Pool &p = cfg.pools[(size_t)cfg.selected];
-					stratum::Config sc;
-					sc.host = p.host;
-					sc.port = p.port;
-					sc.user = cfg.id.user();   // composed, never retyped
-					sc.pass = "x";
-					client.start(sc);
-					status = "connecting";
-				} else {
-					status = "that pool has no host";
 				}
 			} else if (focus == F_POOLS) {
 				pool_cursor = cfg.selected;
