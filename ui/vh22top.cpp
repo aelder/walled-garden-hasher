@@ -540,6 +540,16 @@ static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 // still reach them, which is worse than refusing to draw.
 enum : int { kMinW = 60, kMinH = 19 };
 
+// How long poll() waits for a key. This is the ceiling on input latency and it
+// is deliberately not the redraw interval: a repaint is a full screen of cells
+// plus the escape stream to carry it, and while the engine holds every core at
+// 100% that is competing with the work the user actually started. So the frame
+// slows down and the keyboard does not.
+enum : int { kInputPollMs = 25 };
+static const double kSampleSeconds = 0.10;
+static const double kRedrawIdle = 0.10;
+static const double kRedrawBusy = 0.30;
+
 enum class Screen { Dashboard, Pools, EditPool, Setup };
 enum Focus { F_THREADS = 0, F_LANES, F_BENCH, F_MINE, F_POOLS, F_COUNT };
 enum class Mode { Idle, Mining, Benchmark };
@@ -583,14 +593,18 @@ struct Dust {
 		last = now;
 		live = true;
 	}
-	void step(double now)
+	// `rate` scales fall speed so a particle covers the same distance per
+	// *frame* whatever the refresh rate. Falling at 16 fps speed while
+	// repainting at 3.3 would step a dot most of the way down the cell at a
+	// time, which is not falling, it is blinking.
+	void step(double now, double rate = 1.0)
 	{
 		if (!live) { begin(now); return; }
 		double dt = now - last;
 		last = now;
 		if (dt > 0.25) dt = 0.25;             // a stall must not teleport it
 		for (auto &q : p) {
-			q.y += q.v * dt;
+			q.y += q.v * dt * rate;
 			if (q.y - q.len > kRows)
 				spawn(q, false);
 		}
@@ -694,6 +708,13 @@ struct App {
 			news.build(news_items, w);
 			news_w = w;
 		}
+		// The slide is the only part of the ticker that moves, and at 0.6 s it
+		// is two frames while mining -- a cut rather than a slide. Give it a
+		// frame count instead; the dwell is unaffected, so the copy is on
+		// screen for just as long either way.
+		news.slide = frames(6.0);
+		if (news.slide < 0.6)
+			news.slide = 0.6;
 		marquee(frame, x, y, w, news, now_s() - news_t0);
 	}
 
@@ -728,6 +749,18 @@ struct App {
 	}
 
 	bool pool_ready() const { return client.state() == stratum::State::Ready; }
+
+	// Slow while the engine owns the cores, whether that is mining or a
+	// benchmark -- a benchmark wants the cycles even more, since the number it
+	// prints is the point.
+	double redraw_period() const { return engine.active() ? kRedrawBusy : kRedrawIdle; }
+
+	// Animation durations are expressed in frames, not seconds, so motion
+	// stays smooth at whatever rate we happen to be repainting at. A sweep
+	// tuned for 16 fps gets three frames at 3.3 and reads as a glitch; the
+	// same sweep stretched to the same frame count reads as a slower sweep,
+	// which is all we want from it while the machine is busy.
+	double frames(double n) const { return n * redraw_period(); }
 
 	// When the logo's gloss sweep started, or negative for still. It runs while
 	// work is actually being done rather than merely while the user has asked
@@ -986,7 +1019,14 @@ struct App {
 			// burst is what makes pressing MINE feel like it did something;
 			// holding that rate for an eight-hour run would be exhausting.
 			const double ramp = age > 7.0 ? 1.0 : age / 7.0;
-			const double period = 0.85 + 2.9 * ramp;
+			// Floored at a frame count rather than a time, so the burst cannot
+			// ask for more sweeps than the refresh rate can draw. At 16 fps
+			// this is the 0.85 s it was tuned as; at 3.3 it stretches to 2.7 s
+			// and stays a sweep instead of becoming three stills.
+			double period = 0.85 + 2.9 * ramp;
+			const double floor_period = frames(9.0);
+			if (period < floor_period)
+				period = floor_period;
 			const double travel = span + 2.0 * gwidth;
 			head = fmod(age, period) / period * travel - gwidth;
 		}
@@ -1259,7 +1299,7 @@ struct App {
 			frame.put(x + i, y, g, lerp(lerp(pal::kPanel, pal::kGreen, 0.45),
 			                            pal::kGreen, s), pal::kPanel, true);
 		}
-		dust.step(t);
+		dust.step(t, kRedrawIdle / redraw_period());
 		dust.render(frame, x + n + 1, y, lerp(pal::kPanel, pal::kGreen, 0.75));
 	}
 
@@ -1969,20 +2009,38 @@ struct App {
 		}
 		init();
 		bool go = true;
-		double next = now_s();
+		double next_tick = 0, next_draw = 0;
 		while (go) {
-			const Event e = term.poll(60);
+			// Input is polled on a short timeout no matter how slowly the
+			// frame repaints. That is the whole decoupling: the refresh rate
+			// governs how often the UI redraws *on its own*, never how fast it
+			// answers a key.
+			const Event e = term.poll(kInputPollMs);
 			if (e.key == Key::Quit)
 				break;
-			if (e.key != Key::None && e.key != Key::Resize)
+
+			bool dirty = (e.key == Key::Resize);
+			if (e.key != Key::None && e.key != Key::Resize) {
 				go = on_key(e);
+				dirty = true;   // a keystroke is on screen before the next tick
+			}
 			if (!go)
 				break;
 
-			if (now_s() >= next) {
-				next = now_s() + 0.1;
+			// Sampling keeps its own cadence. It is a mach call and an atomic
+			// load, nothing next to a repaint, and holding it steady keeps the
+			// plot's time axis the same whether mining or not.
+			const double t = now_s();
+			if (t >= next_tick) {
+				next_tick = t + kSampleSeconds;
 				tick();
 			}
+			if (t >= next_draw)
+				dirty = true;
+			if (!dirty)
+				continue;
+			next_draw = now_s() + redraw_period();
+
 			term.measure();
 			frame.resize(term.width(), term.height());
 			frame.clear();
