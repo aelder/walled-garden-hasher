@@ -2015,8 +2015,48 @@ struct App {
 	}
 };
 
-int main()
+// Bumped by hand, and the release tag is expected to match it.
+static const char *kVersion = "1.0.0";
+
+static void usage(FILE *f)
 {
+	fprintf(f,
+	        "vh22-top %s — VerusHash 2.2 miner for Apple silicon\n"
+	        "\n"
+	        "usage: vh22-top [--version] [--help]\n"
+	        "\n"
+	        "Takes no configuration on the command line: the payout address is\n"
+	        "asked for once on first run, and pools are a list inside the UI.\n"
+	        "\n"
+	        "  ↑↓      move between controls\n"
+	        "  ←→      adjust threads and lanes\n"
+	        "  ⏎       select, or start and stop\n"
+	        "  i       set the payout address\n"
+	        "  q       quit\n"
+	        "\n"
+	        "  ~/.config/vh22/config   identity and pools, mode 0600\n"
+	        "  $VH22_NEWS              ticker copy; also ~/.config/vh22/news.md\n"
+	        "\n"
+	        "Needs an interactive terminal, at least 60x19.\n",
+	        kVersion);
+}
+
+int main(int argc, char **argv)
+{
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a == "--version" || a == "-V") {
+			printf("vh22-top %s\n", kVersion);
+			return 0;
+		}
+		if (a == "--help" || a == "-h") {
+			usage(stdout);
+			return 0;
+		}
+		fprintf(stderr, "vh22-top: unknown option %s\n\n", a.c_str());
+		usage(stderr);
+		return 2;
+	}
 	App app;
 	return app.run();
 }
