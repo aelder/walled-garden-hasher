@@ -112,7 +112,6 @@ std::string Frame::render() const
 			first = false;
 			out += c.ch;
 		}
-		out += "\x1b[K";
 	}
 	out += "\x1b[0m";
 	return out;
@@ -457,7 +456,7 @@ static void restore_atexit()
 		g_have_saved = false;
 	}
 	// Cursor back, leave the alternate screen.
-	const char *s = "\x1b[?25h\x1b[?1049l";
+	const char *s = "\x1b[?7h\x1b[?25h\x1b[?1049l";
 	ssize_t rc = write(STDOUT_FILENO, s, strlen(s));
 	(void)rc;
 }
@@ -487,7 +486,7 @@ bool Terminal::begin()
 	sigaction(SIGINT, &sa, nullptr);
 	sigaction(SIGTERM, &sa, nullptr);
 
-	const char *s = "\x1b[?1049h\x1b[?25l\x1b[2J";
+	const char *s = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J";
 	ssize_t rc = write(STDOUT_FILENO, s, strlen(s));
 	(void)rc;
 	active_ = true;
