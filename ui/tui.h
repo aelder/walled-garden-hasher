@@ -41,6 +41,10 @@ constexpr Rgb kDim = {74, 74, 72};
 constexpr Rgb kPanel = {26, 26, 28};
 constexpr Rgb kBar = {44, 44, 46};
 
+// Specular white for the gloss sweep. Slightly warm, so the highlight reads as
+// light moving across a surface rather than as a change of colour.
+constexpr Rgb kGloss = {255, 252, 244};
+
 // Logo order, for gradients.
 constexpr Rgb kRainbow[6] = {kGreen, kYellow, kOrange, kRed, kPurple, kBlue};
 } // namespace pal

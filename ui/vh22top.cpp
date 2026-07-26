@@ -729,6 +729,12 @@ struct App {
 
 	bool pool_ready() const { return client.state() == stratum::State::Ready; }
 
+	// When the logo's gloss sweep started, or negative for still. It runs while
+	// work is actually being done rather than merely while the user has asked
+	// for it, so it goes dead the moment the pool does -- the same rule the
+	// status line and the run label follow.
+	double gloss_t0 = -1;
+
 	// The single source of truth for "what is going on with the pool". The bug
 	// this replaces was a status line that reported the user's *intent*
 	// (mode == Mining) as though it were the pool's state, so a pool that had
@@ -869,6 +875,16 @@ struct App {
 			}
 		}
 		load.sample(sys.ncpu);
+
+		// Restarting the clock rather than merely gating it means the burst
+		// replays every time work resumes, so a pool that drops and comes back
+		// is visible in the logo as well as in the status line.
+		if (mode == Mode::Mining && pool_ready()) {
+			if (gloss_t0 < 0)
+				gloss_t0 = t;
+		} else {
+			gloss_t0 = -1;
+		}
 	}
 
 	// --- drawing ---------------------------------------------------------
@@ -954,6 +970,27 @@ struct App {
 		const int oy = gy + (gh - art->rows) / 2;
 		const int dots_h = gh * 4;
 
+		// A specular highlight travelling across the logo while work is being
+		// done. The band is measured as c + 2*r because a cell is about twice
+		// as tall as it is wide -- the same anisotropy the feathering below has
+		// to cancel. Using c + r instead lays the band over at roughly 27
+		// degrees on screen, which reads as horizontal drift rather than as a
+		// glint travelling across a surface.
+		const bool gloss = gloss_t0 >= 0;
+		const double span = (double)lw + 2.0 * (double)art->rows;
+		const double gwidth = 4.0 + span * 0.10;
+		double head = 0;
+		if (gloss) {
+			const double age = now_s() - gloss_t0;
+			// Quick sweeps to begin with, settling into a slower idle. The
+			// burst is what makes pressing MINE feel like it did something;
+			// holding that rate for an eight-hour run would be exhausting.
+			const double ramp = age > 7.0 ? 1.0 : age / 7.0;
+			const double period = 0.85 + 2.9 * ramp;
+			const double travel = span + 2.0 * gwidth;
+			head = fmod(age, period) / period * travel - gwidth;
+		}
+
 		for (int r = 0; r < art->rows; ++r) {
 			const char *row = art->line[r];
 			// Six stripes spread across the logo's height, green at the crown.
@@ -971,9 +1008,24 @@ struct App {
 				// cell's four dot rows.
 				const int top_dot = dots_h - fill[(size_t)cx];
 				const bool wet = top_dot <= cy * 4 + 3;
+				Rgb col = wet ? bright : lerp(pal::kPanel, pal::kChrome, 0.55);
+
+				bool hot = false;
+				if (gloss) {
+					double v = 1.0 - fabs((double)c + 2.0 * (double)r - head) / gwidth;
+					if (v > 0) {
+						v *= v;   // tighten the core, so it is a highlight and
+						          // not a wash across half the logo
+						// The dry metal above the waterline takes more of the
+						// light than the lit water below it does; an equal
+						// blend washes the stripes out where they are the
+						// whole point.
+						col = lerp(col, pal::kGloss, v * (wet ? 0.5 : 0.85));
+						hot = v > 0.55;
+					}
+				}
 				const char g[2] = {row[c], 0};
-				frame.put(ox + c, oy + r, g,
-				          wet ? bright : lerp(pal::kPanel, pal::kChrome, 0.55));
+				frame.put(ox + c, oy + r, g, col, pal::kPanel, hot);
 			}
 		}
 
