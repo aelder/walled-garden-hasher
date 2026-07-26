@@ -1,6 +1,7 @@
 #include "tui.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -343,6 +344,56 @@ void braille_spark(Frame &f, int x, int y, int w, int h, const std::vector<doubl
 			encode_braille(m, g);
 			f.put(x + cx, y + cy, g, lerp(lo, hi, colval[(size_t)cx]));
 		}
+}
+
+void Ticker::build(const std::vector<std::string> &items, int min_cols)
+{
+	glyph.clear();
+	colour.clear();
+	if (items.empty())
+		return;
+
+	auto push = [&](const std::string &s, Rgb c) {
+		for (size_t i = 0; i < s.size();) {
+			const unsigned char b = (unsigned char)s[i];
+			size_t len = 1;
+			if ((b & 0xE0) == 0xC0) len = 2;
+			else if ((b & 0xF0) == 0xE0) len = 3;
+			else if ((b & 0xF8) == 0xF0) len = 4;
+			if (i + len > s.size())
+				len = 1;
+			glyph.push_back(s.substr(i, len));
+			colour.push_back(c);
+			i += len;
+		}
+	};
+
+	for (size_t k = 0; k < items.size(); ++k) {
+		push(items[k], pal::kInk);
+		// The separator takes the next logo stripe, so a run of headlines is
+		// still visibly part of this UI rather than a scrolling paragraph.
+		push("   ", pal::kInk);
+		push("◆", pal::kRainbow[k % 6]);
+		push("   ", pal::kInk);
+	}
+	while ((int)glyph.size() < min_cols + 8) {
+		glyph.push_back(" ");
+		colour.push_back(pal::kInk);
+	}
+}
+
+void marquee(Frame &f, int x, int y, int w, const Ticker &t, double offset)
+{
+	if (t.empty() || w <= 0)
+		return;
+	const int n = (int)t.glyph.size();
+	int base = (int)fmod(offset, (double)n);
+	if (base < 0)
+		base += n;
+	for (int i = 0; i < w; ++i) {
+		const int k = (base + i) % n;
+		f.put(x + i, y, t.glyph[(size_t)k].c_str(), t.colour[(size_t)k]);
+	}
 }
 
 void meter(Frame &f, int x, int y, int w, double frac, Rgb full, Rgb empty)

@@ -150,6 +150,27 @@ int disp_len(const std::string &s);
 // part that says what to do about it.
 std::string ellipsize(const std::string &s, int cols);
 
+// A one-row news ticker.
+//
+// The copy is decoded to one entry per column once, at build time rather than
+// per frame: the headlines are full of em dashes, and indexing a scroll offset
+// into raw bytes would slice them in half and desynchronise the whole line.
+struct Ticker {
+	std::vector<std::string> glyph;
+	std::vector<Rgb> colour;
+
+	// Joins the items with a separator and pads the loop out to at least
+	// `min_cols`, so a list shorter than the screen cannot meet its own tail
+	// and appear on it twice at once.
+	void build(const std::vector<std::string> &items, int min_cols);
+	bool empty() const { return glyph.empty(); }
+};
+
+// `offset` is columns scrolled, and wraps -- the caller can let it grow without
+// bound and derive it from elapsed time, so a stalled frame does not lose the
+// ticker's place.
+void marquee(Frame &f, int x, int y, int w, const Ticker &t, double offset);
+
 // A compact braille history trace, for one core per row. Same plotting
 // density as braille_plot, but coloured per column by that column's own value
 // rather than by height -- at one row tall there is only one height band, so

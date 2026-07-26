@@ -430,6 +430,67 @@ static bool save_settings(const Settings &st)
 	return true;
 }
 
+// --- ticker copy ----------------------------------------------------------
+//
+// Read at runtime rather than compiled in, so the copy can be edited and
+// reread without a rebuild -- it is prose, and prose wants a fast loop. The
+// single line below is the fallback for a binary that ships without the file.
+static const char *kNewsFallback =
+	"Walled Garden Hasher released, bringing Verus mining to Apple Silicon — "
+	"at least one person reportedly extremely excited.";
+
+// Headlines are the bullets under the `## live` heading. Scoping them to a
+// section rather than taking every bullet in the file is what lets the file
+// carry its own house style notes and a graveyard of spiked drafts -- both of
+// which want to be bullet lists too, and neither of which wants to be on
+// screen. A file with no `## live` heading is read as a plain list.
+static std::vector<std::string> load_news()
+{
+	std::vector<std::string> paths;
+	if (const char *env = getenv("VH22_NEWS"))
+		paths.push_back(env);
+	paths.push_back(config_dir() + "/news.md");
+	paths.push_back("ui/news.md");   // running from vh22/, as `make top` does
+	paths.push_back("news.md");
+
+	for (const auto &path : paths) {
+		FILE *f = fopen(path.c_str(), "r");
+		if (!f)
+			continue;
+		std::vector<std::string> live, all;
+		bool in_live = false, seen_live = false;
+		char line[1024];
+		while (fgets(line, sizeof(line), f)) {
+			std::string s(line);
+			while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+				s.pop_back();
+			const size_t i = s.find_first_not_of(" \t");
+			if (i == std::string::npos)
+				continue;
+			if (s[i] == '#') {
+				std::string h = s.substr(i);
+				for (auto &ch : h)
+					ch = (char)tolower((unsigned char)ch);
+				in_live = h.find("live") != std::string::npos;
+				seen_live = seen_live || in_live;
+				continue;
+			}
+			if (s.compare(i, 2, "- ") != 0 && s.compare(i, 2, "* ") != 0)
+				continue;
+			const std::string item = s.substr(i + 2);
+			all.push_back(item);
+			if (in_live)
+				live.push_back(item);
+		}
+		fclose(f);
+		if (seen_live && !live.empty())
+			return live;
+		if (!seen_live && !all.empty())
+			return all;
+	}
+	return {kNewsFallback};
+}
+
 // --- app ------------------------------------------------------------------
 
 // Two Apple logos. The watermark takes the largest that fits the plot; the
@@ -618,6 +679,25 @@ struct App {
 	int pending_pool = -1;   // pool to select once an address is finally set
 	std::string form_err;    // inline, on the form that caused it
 
+	// The ticker. Rebuilt only on a width change, and scrolled from elapsed
+	// time rather than accumulated per frame, so a stall cannot make it drift.
+	std::vector<std::string> news_items;
+	Ticker news;
+	int news_w = -1;
+	double news_t0 = 0;
+
+	void draw_marquee(int x, int y, int w)
+	{
+		if (news_items.empty() || w <= 0)
+			return;
+		if (w != news_w) {
+			news.build(news_items, w);
+			news_w = w;
+		}
+		// About ten seconds for a glyph to cross, whatever the window is wide.
+		marquee(frame, x, y, w, news, (now_s() - news_t0) * ((double)w / 10.0));
+	}
+
 	// The transient line in the bottom bar. It expires, because a message that
 	// never clears stops being about now.
 	std::string status;
@@ -714,6 +794,8 @@ struct App {
 			screen = Screen::Setup;
 			field = 0;
 		}
+		news_items = load_news();
+		news_t0 = now_s();
 		hist.assign(400, 0.0);
 		uint8_t header[1487];
 		for (size_t i = 0; i < sizeof(header); ++i)
@@ -1203,7 +1285,11 @@ struct App {
 				if (fits(1))
 					frame.text(c + 2, ty++, ellipsize(p.host + ":" + p.port, cw - 2),
 					           pal::kInk);
-				if (fits(1))
+				// The address yields before the share counters do: it is also
+				// on the Pools screen and in the config, whereas whether
+				// shares are landing is only ever here. An address that is
+				// *missing* still gets the row, because that is a fault.
+				if (fits(1) && (budget >= 6 || !cfg.id.complete()))
 					frame.text(c + 2, ty++,
 					           cfg.id.complete() ? ellipsize(cfg.id.shortened(), cw - 2)
 					                             : "(no payout address)",
@@ -1264,7 +1350,7 @@ struct App {
 			     sx.last_share_time > 0 ? pal::kInk : pal::kDim);
 		} else if (fits(1)) {
 			char line[96];
-			snprintf(line, sizeof(line), "%llu ok · %llu stale · %llu rej",
+			snprintf(line, sizeof(line), "%llu ok·%llu stale·%llu rej",
 			         (unsigned long long)sx.accepted, (unsigned long long)sx.stale,
 			         (unsigned long long)sx.rejected);
 			stat(c, ty++, cw, "shares", line, acc_col);
@@ -1309,11 +1395,19 @@ struct App {
 		// on screen -- below that they were drawn past the bottom of the
 		// terminal and the user was pressing Enter on things they could not see.
 		const int bot_min = 9;
-		const int bot_max = (H - y) - 6;
+		// The ticker is chrome, so it is the first thing dropped: it gets its
+		// row only once the graph and both panels have theirs.
+		const bool news_row = !news_items.empty() && (H - y) >= 5 + bot_min + 2;
+		const int reserved = news_row ? 1 : 0;
+		const int bot_max = (H - y) - 6 - reserved;
 		if (bot > bot_max) bot = bot_max;
 		if (bot < bot_min) bot = bot_min;
-		int gh = H - y - bot - 1;
+		int gh = H - y - bot - 1 - reserved;
 		if (gh < 5) gh = 5;
+		if (news_row) {
+			draw_marquee(0, y, W);
+			++y;
+		}
 		draw_graph(0, y, W, gh);
 		y += gh;
 		const int lw = W / 2;
