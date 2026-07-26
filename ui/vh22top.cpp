@@ -341,6 +341,10 @@ struct Settings {
 	Identity id;
 	std::vector<Pool> pools;
 	int selected = 0;
+	// Whether the user has actually picked a pool. The list is seeded on
+	// first run, so `selected` always points at something -- showing that as
+	// a live selection while nothing is connected is a lie, and it was one.
+	bool chosen = false;
 };
 
 static bool load_settings(Settings &out)
@@ -361,6 +365,7 @@ static bool load_settings(Settings &out)
 		if (k == "address") out.id.address = v;
 		else if (k == "rig") out.id.rig = v;
 		else if (k == "selected") out.selected = atoi(v.c_str());
+		else if (k == "chosen") out.chosen = (v == "1");
 		else if (k == "pool") { out.pools.push_back(Pool()); out.pools.back().label = v; }
 		else if (!out.pools.empty() && k == "host") out.pools.back().host = v;
 		else if (!out.pools.empty() && k == "port") out.pools.back().port = v;
@@ -400,8 +405,8 @@ static bool save_settings(const Settings &st)
 	if (!f)
 		return false;
 	fprintf(f, "# vh22 configuration\n");
-	fprintf(f, "address=%s\nrig=%s\nselected=%d\n\n", st.id.address.c_str(),
-	        st.id.rig.c_str(), st.selected);
+	fprintf(f, "address=%s\nrig=%s\nselected=%d\nchosen=%d\n\n",
+	        st.id.address.c_str(), st.id.rig.c_str(), st.selected, st.chosen ? 1 : 0);
 	for (const auto &p : st.pools)
 		fprintf(f, "pool=%s\nhost=%s\nport=%s\nbuiltin=%d\n", p.label.c_str(),
 		        p.host.c_str(), p.port.c_str(), p.builtin ? 1 : 0);
@@ -611,6 +616,26 @@ struct App {
 		engine.configure(header, sizeof(header));
 		last_t = now_s();
 		load.sample(sys.ncpu);
+		connect_selected();
+	}
+
+	// A chosen pool is tested, always. Nothing else explains a status line.
+	void connect_selected()
+	{
+		client.stop();
+		if (!cfg.chosen || !cfg.id.complete() || cfg.pools.empty())
+			return;
+		const Pool &p = cfg.pools[(size_t)cfg.selected];
+		if (p.host.empty()) {
+			status = "that pool has no host";
+			return;
+		}
+		stratum::Config sc;
+		sc.host = p.host;
+		sc.port = p.port;
+		sc.user = cfg.id.user();
+		sc.pass = "x";
+		client.start(sc);
 	}
 
 	void tick()
@@ -892,7 +917,9 @@ struct App {
 			frame.text(x - 2, y, "▸", mining || pool_ready ? pal::kGreen : pal::kDim);
 		if (!pool_ready && !mining) {
 			frame.text(x, y, "mine", pal::kDim);
-			frame.text(x + 6, y, "(select a pool)", pal::kDim);
+			frame.text(x + 6, y,
+			           cfg.chosen ? "(waiting for the pool)" : "(select a pool)",
+			           pal::kDim);
 			return;
 		}
 		if (!mining) {
@@ -957,8 +984,9 @@ struct App {
 		int ty = y + 2;
 		auto room = [&](int need) { return ty + need <= btn - 3; };
 
-		if (cfg.pools.empty()) {
-			if (room(1)) frame.text(c, ty++, "no pool configured", pal::kDim);
+		if (!cfg.chosen || cfg.pools.empty()) {
+			if (room(1)) frame.text(c, ty++, "no pool selected", pal::kDim);
+			if (room(2)) { ++ty; frame.text(c, ty++, "choose one below", pal::kDim); }
 		} else {
 			const Pool &p = cfg.pools[(size_t)cfg.selected];
 			if (room(1))
@@ -979,10 +1007,17 @@ struct App {
 			++ty;
 			// "verified" is the useful word here: the pool answered, gave a
 			// target and gave work, so it is known good before mining starts.
-			std::string sline = mode == Mode::Mining ? "mining"
-			                    : on                 ? "verified"
-			                    : live               ? "connecting"
-			                                         : "not connected";
+			// Anything else shows the client's own note -- "cannot resolve",
+			// "connection refused", "reconnecting in 4s" -- because a status
+			// that only says "not connected" leaves the user with nothing to
+			// act on.
+			const std::string note = client.status_text();
+			std::string sline;
+			if (!cfg.chosen)          sline = "no pool selected";
+			else if (mode == Mode::Mining) sline = "mining";
+			else if (on)              sline = "verified";
+			else if (!note.empty())   sline = note;
+			else                      sline = "connecting";
 			stat(c, ty++, "status", (on ? "● " : (live ? "◐ " : "○ ")) + sline,
 			     on ? pal::kGreen
 			        : (st == stratum::State::Failed ? pal::kRed : pal::kDim));
@@ -1015,7 +1050,8 @@ struct App {
 		if (foc_mine)
 			focus_box(bx, mine_row, bw,
 			          mode == Mode::Mining || verified ? pal::kGreen : pal::kDim);
-		draw_button(ix, btn, bw - 6, "Change pool…", foc_pools, pal::kPurple);
+		draw_button(ix, btn, bw - 6, cfg.chosen ? "Change pool…" : "Select pool…",
+		            foc_pools, pal::kPurple);
 		if (foc_pools)
 			focus_box(bx, btn, bw, pal::kPurple);
 	}
@@ -1245,13 +1281,13 @@ struct App {
 				// status says whether the endpoint is any good.
 				if (!cfg.pools.empty()) {
 					cfg.selected = pool_cursor;
+					cfg.chosen = true;
 					save_settings(cfg);
 					if (mode == Mode::Mining) {
 						engine.stop();
 						engine.set_pool(nullptr);
 						mode = Mode::Idle;
 					}
-					client.stop();
 					if (!cfg.id.complete()) {
 						id_draft = cfg.id;
 						field = 0;
@@ -1259,18 +1295,8 @@ struct App {
 						status = "set your address first";
 						break;
 					}
-					const Pool &p = cfg.pools[(size_t)cfg.selected];
-					if (p.host.empty()) {
-						status = "that pool has no host";
-					} else {
-						stratum::Config sc;
-						sc.host = p.host;
-						sc.port = p.port;
-						sc.user = cfg.id.user();
-						sc.pass = "x";
-						client.start(sc);
-						status = "connecting";
-					}
+					connect_selected();
+					status = "connecting";
 					screen = Screen::Dashboard;
 				}
 				break;

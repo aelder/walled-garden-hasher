@@ -394,9 +394,20 @@ void Client::run(Config cfg)
 			backoff = 1;
 			stats_.reconnects.fetch_add(1);
 		}
-		char note[96];
-		snprintf(note, sizeof(note), "reconnecting in %ds", backoff);
-		set_state(State::Disconnected, note);
+
+		// Keep why it failed. Overwriting it with a bare countdown leaves the
+		// user staring at "reconnecting" with nothing to act on -- a wrong
+		// port and a dead pool look identical, and one of them is their typo.
+		const std::string why = status_text();
+		char note[192];
+		if (reached_ready)
+			snprintf(note, sizeof(note), "connection lost — retry in %ds", backoff);
+		else if (!why.empty() && why.find("retry in") == std::string::npos)
+			snprintf(note, sizeof(note), "%s — retry in %ds", why.c_str(), backoff);
+		else
+			snprintf(note, sizeof(note), "reconnecting in %ds", backoff);
+		// Red while it has never worked; grey once it has and merely dropped.
+		set_state(reached_ready ? State::Disconnected : State::Failed, note);
 
 		for (int i = 0; i < backoff * 10 && run_.load(); ++i)
 			usleep(100000);
