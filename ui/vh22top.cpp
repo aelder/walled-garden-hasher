@@ -1187,6 +1187,21 @@ struct App {
 
 	// --- input -----------------------------------------------------------
 
+	// MINE is not reachable until a pool has been chosen: there is nothing it
+	// could do, and stopping on it makes the user work out why by themselves.
+	bool focusable(int f) const { return f != F_MINE || cfg.chosen; }
+
+	int step_focus(int from, int dir) const
+	{
+		int f = from;
+		for (int i = 0; i < F_COUNT; ++i) {
+			f = (f + dir + F_COUNT) % F_COUNT;
+			if (focusable(f))
+				return f;
+		}
+		return from;
+	}
+
 	void adjust(int dir)
 	{
 		if (focus == F_THREADS) {
@@ -1297,6 +1312,7 @@ struct App {
 					}
 					connect_selected();
 					status = "connecting";
+					focus = F_MINE;   // the reason you came here
 					screen = Screen::Dashboard;
 				}
 				break;
@@ -1334,9 +1350,9 @@ struct App {
 		}
 
 		switch (e.key) {
-		case Key::Up: focus = (focus + F_COUNT - 1) % F_COUNT; break;
+		case Key::Up: focus = step_focus(focus, -1); break;
 		case Key::Down:
-		case Key::Tab: focus = (focus + 1) % F_COUNT; break;
+		case Key::Tab: focus = step_focus(focus, +1); break;
 		case Key::Left: adjust(-1); break;
 		case Key::Right: adjust(+1); break;
 		case Key::Enter:
