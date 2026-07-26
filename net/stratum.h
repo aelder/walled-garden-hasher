@@ -133,6 +133,10 @@ public:
 	mutable std::mutex mu;
 	std::string note_;
 	std::string error_;
+	// The address actually connected to, from getpeername. Reporting the
+	// configured host instead reports what we meant to do; a pool behind
+	// round-robin DNS, or a stale selection, would both read as correct.
+	std::string peer_;
 	Job job;
 	uint64_t serial = 0;
 	std::string xnonce1;
@@ -172,6 +176,10 @@ public:
 	std::string status_text() const;
 	// The last failure, still true until something works. Empty once minable.
 	std::string last_error() const;
+	// The endpoint this client is actually talking to: its own host:port, and
+	// the peer address it resolved to once connected. Empty when not running.
+	// A caller showing this cannot show a pool it is not connected to.
+	std::string endpoint() const;
 	StatsView stats() const;
 	Config config() const;
 

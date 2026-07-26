@@ -1333,9 +1333,17 @@ struct App {
 				if (fits(1))
 					frame.text(c, ty++, ellipsize("● " + p.label, cw), pal::kPurple,
 					           pal::kPanel, true);
-				if (fits(1))
-					frame.text(c + 2, ty++, ellipsize(p.host + ":" + p.port, cw - 2),
-					           pal::kInk);
+				// From the client when there is one, so this row reports the
+				// socket rather than the selection. Drawing p.host here means
+				// drawing what we intended to connect to, which is the same
+				// thing right up until the moment it is not.
+				if (fits(1)) {
+					const std::string live = client.endpoint();
+					frame.text(c + 2, ty++,
+					           ellipsize(live.empty() ? p.host + ":" + p.port : live,
+					                     cw - 2),
+					           live.empty() ? pal::kDim : pal::kInk);
+				}
 				// The address yields before the share counters do: it is also
 				// on the Pools screen and in the config, whereas whether
 				// shares are landing is only ever here. An address that is

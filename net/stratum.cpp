@@ -547,6 +547,18 @@ int connect_one(Conn &c, struct addrinfo *a, int64_t deadline)
 		errno = err;
 		return -1;
 	}
+	// Record who we are actually talking to, not who we meant to.
+	{
+		struct sockaddr_storage ss;
+		socklen_t sl = sizeof(ss);
+		char host[NI_MAXHOST] = {0};
+		if (getpeername(fd, (struct sockaddr *)&ss, &sl) == 0 &&
+		    getnameinfo((struct sockaddr *)&ss, sl, host, sizeof(host), nullptr, 0,
+		                NI_NUMERICHOST) == 0) {
+			std::lock_guard<std::mutex> g(c.mu);
+			c.peer_ = host;
+		}
+	}
 	int one = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 	// A pool that vanishes without a FIN -- a laptop lid, a NAT timeout --
@@ -615,6 +627,7 @@ bool session(Conn &c)
 		c.stats.stale.fetch_add(c.pending.size());
 		c.pending.clear();
 		c.outbox.clear();
+		c.peer_.clear();   // a peer from the last session is not this one
 	}
 	c.job_serial.store(0, std::memory_order_release);
 	c.authorized = false;
@@ -874,6 +887,18 @@ std::string Client::last_error() const
 {
 	const auto c = conn();
 	return c ? c->error() : std::string();
+}
+
+std::string Client::endpoint() const
+{
+	const auto c = conn();
+	if (!c)
+		return std::string();
+	std::string s = c->cfg.host + ":" + c->cfg.port;
+	std::lock_guard<std::mutex> g(c->mu);
+	if (!c->peer_.empty() && c->peer_ != c->cfg.host)
+		s += " · " + c->peer_;
+	return s;
 }
 
 Config Client::config() const
