@@ -1145,10 +1145,13 @@ struct App {
 		window(frame, 0, 0, W, H - 1, "Welcome", true, pal::kGreen);
 
 		int ty = 3;
-		if (block_text_width("VH22") <= W - 8) {
-			block_text(frame, 6, ty, "VH22", pal::kInk);
+		if (block_text_width("WGH") <= W - 8) {
+			block_text(frame, 6, ty, "WGH", pal::kInk);
 			ty += kBlockRows + 1;
 		}
+		frame.text(6, ty++, "Mining at the speed of Apple Silicon!", pal::kGreen,
+		           pal::kPanel, true);
+		++ty;
 		frame.text(6, ty++, "Two things, once. Everything after this is a list.",
 		           pal::kLabel);
 		++ty;
