@@ -732,8 +732,9 @@ bool session(Conn &c)
 			// never hashed, because the bytes the engine varies are the last
 			// fifteen of the solution, not the header's nonce field. The
 			// framing was correct, every field was well formed, and every
-			// share was rejected. ../verus/verusscan.cpp:517 is the
-			// specification: work->extra + 1332, which is solution byte 1329.
+			// share was rejected. The specification is record_solution in
+			// the deployed miner's verusscan.cpp: work->extra + 1332, three
+			// bytes of CompactSize past solution byte 1329.
 			uint8_t sol_bytes[kSolutionBytes];
 			memcpy(sol_bytes, j.solution, kSolutionBytes);
 			uint8_t space[kNonceSpaceBytes];

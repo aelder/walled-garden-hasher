@@ -1,8 +1,2 @@
 build/
-
-# The repo root ignores a bare `Makefile` for the autotools-generated one.
-# That pattern is unanchored, so it matches at every depth and swallowed this
-# tree's hand-written Makefile too. Re-include it explicitly.
-!Makefile
-
 dist/

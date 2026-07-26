@@ -1,9 +1,10 @@
 // Verus PBaaS stratum client.
 //
 // Runs on its own thread and hands the miner an immutable Job. The wire format
-// is transcribed from the deployed implementation in ../verus/stratum.cpp and
-// the work assembly in ../ccminer.cpp, which is the only specification that
-// exists for this dialect.
+// is transcribed from the deployed ccminer-based Verus miner -- its
+// stratum.cpp and work assembly -- which is the only specification that exists
+// for this dialect. Those sources are not vendored here; only the two files
+// make crosscheck compiles are, under third_party/.
 #pragma once
 
 #include <stdint.h>

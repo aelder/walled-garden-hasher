@@ -57,9 +57,10 @@ $(BUILD)/vh22-top: $(UI_OBJ) $(NET_OBJ) $(ENGINE_OBJ)
 top: $(BUILD)/vh22-top
 	$(BUILD)/vh22-top
 
-# End-to-end diff against the deployed sse2neon build. Reaches outside the
-# tree into ../verus, so it is not part of `all`.
-UPSTREAM_DIR ?= ../verus
+# End-to-end diff against the deployed sse2neon implementation, vendored in
+# third_party/verus under its own licence. It needs a submodule and a second
+# compile of the upstream sources, so it is a gate rather than part of `all`.
+UPSTREAM_DIR ?= third_party/verus
 UPSTREAM_FLAGS = -O2 -mcpu=$(MCPU) -DARM -I$(UPSTREAM_DIR) -w
 
 # The upstream sources include sse2neon, which is a submodule and is therefore
@@ -69,7 +70,7 @@ $(BUILD)/upstream/verus_clhash.o: $(UPSTREAM_DIR)/verus_clhash.cpp
 	@mkdir -p $(dir $@)
 	@test -f $(UPSTREAM_DIR)/sse2neon/sse2neon.h || { \
 	  echo "crosscheck needs the sse2neon submodule:"; \
-	  echo "    git submodule update --init verus/sse2neon"; \
+	  echo "    git submodule update --init third_party/verus/sse2neon"; \
 	  exit 1; }
 	$(CXX) $(UPSTREAM_FLAGS) -std=c++17 -c $< -o $@
 

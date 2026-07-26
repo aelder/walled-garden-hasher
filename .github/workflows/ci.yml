@@ -1,0 +1,118 @@
+# The four gates AGENTS.md requires, on every push.
+#
+# They are not redundant. `test` compares against a reference written from the
+# specification; `crosscheck` compares against the deployed sse2neon build. A
+# reference transcribed from the same misreading as the implementation agrees
+# with it perfectly, which is exactly how clhash case 4 passed 70,255 checks
+# while reading the wrong round constants -- only the cross-check caught it.
+# `audit-disas` catches codegen regressions, which are correctness-neutral and
+# so invisible to both. `stratum-test` covers the share path end to end.
+name: gates
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    # Apple silicon. The engine is AArch64 crypto intrinsics built with
+    # -mcpu=native; there is nothing to learn from running it on x86.
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # crosscheck compiles ../verus, which includes sse2neon. Without the
+          # submodule that gate is skipped rather than failed, which is the
+          # quiet kind of green nobody notices.
+          submodules: recursive
+
+      - name: Toolchain
+        run: |
+          clang++ --version
+          sysctl -n machdep.cpu.brand_string
+          python3 --version
+
+      - name: Build
+        run: make all
+
+      - name: Differential against the from-spec reference
+        run: make test
+
+      - name: Cross-check against the deployed sse2neon build
+        run: make crosscheck
+
+      - name: Share path end to end
+        run: make stratum-test
+
+      - name: Codegen audit
+        # AESE/AESMC pairing is what clang will silently ruin, and neither
+        # correctness gate can see it.
+        run: python3 tools/audit-disas.py build/src/*.o
+
+      - name: Front end starts and exits without a terminal
+        # It cannot draw here -- there is no tty -- so this asserts the refusal
+        # is clean rather than a crash or a hang.
+        run: |
+          set +e
+          ./build/vh22-top < /dev/null > out.txt 2>&1
+          rc=$?
+          set -e
+          cat out.txt
+          test $rc -eq 1 || { echo "expected exit 1 without a tty, got $rc"; exit 1; }
+          grep -q "interactive terminal" out.txt
+
+  # Only on a v* tag, and only behind the gates: a release that skipped them
+  # would be the one artifact where it mattered most that they ran.
+  release:
+    needs: gates
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: make all
+
+      - name: Tag must match the version the binary reports
+        # Otherwise the tag and the thing users run disagree, and the first
+        # person to paste --version into a bug report is the one who finds out.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          got="$(./build/vh22-top --version | awk '{print $2}')"
+          echo "tag $tag, binary $got"
+          test "$tag" = "$got" || {
+            echo "tag v$tag does not match kVersion $got in ui/vh22top.cpp"; exit 1; }
+
+      - name: Package
+        run: |
+          name="walled-garden-hasher-${GITHUB_REF_NAME}-macos-arm64"
+          mkdir -p "dist/$name"
+          cp build/vh22-top "dist/$name/"
+          cp ui/news.md "dist/$name/"
+          cp INSTALL.md "dist/$name/"
+          cd dist
+          tar czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="walled-garden-hasher-${GITHUB_REF_NAME}-macos-arm64"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "The Walled Garden Hasher $GITHUB_REF_NAME" \
+            --notes-file INSTALL.md \
+            "dist/$name.tar.gz" \
+            "dist/$name.tar.gz.sha256"

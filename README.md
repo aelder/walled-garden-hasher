@@ -1,24 +1,50 @@
-# vh22 — native AArch64 VerusHash 2.2
+# The Walled Garden Hasher
 
-A greenfield C++ implementation of VerusHash 2.2 built directly on ARM crypto
-intrinsics, rather than routing x86 intrinsics through `sse2neon`. Written
-against *VerusHash 2.2 — Native Apple Silicon Port: Engineering Notes*; section
-references below (§N) are to that document.
+A VerusHash 2.2 miner for Apple silicon. CPU only, no dependencies, one binary.
+
+The engine is a greenfield C++ implementation built directly on ARM crypto
+intrinsics rather than routing x86 intrinsics through `sse2neon`. On an M5
+MacBook Air it runs **4.97 MH/s** on one thread and **29.28 MH/s** sustained on
+ten, against 3.85 and 26.21 for the tuned `sse2neon` miner on the same machine
+and the same work — +29% per core, and +12% where the machine is power- and
+bandwidth-limited rather than engine-limited.
+
+On top of it: a dependency-free Verus PBaaS stratum client and `vh22-top`, a
+terminal front end.
+
+The engine was written against *VerusHash 2.2 — Native Apple Silicon Port:
+Engineering Notes*. Section references below (§N) are to that document, and the
+places measurement contradicted it are recorded under
+[Where measurement disagreed with the notes](#where-measurement-disagreed-with-the-notes).
 
 ```
+make top         # build and run the miner
 make test        # differential harness against ref/ (written from the spec)
+make crosscheck  # end-to-end diff against the deployed sse2neon implementation
 make bench       # throughput
-make crosscheck  # end-to-end diff against the deployed sse2neon build
 python3 tools/audit-disas.py build/src/*.o   # §10 codegen checks
 ```
 
-`make test` and `make bench` are self-contained. `make crosscheck` builds the
-upstream sources in `../verus`, which include sse2neon as a submodule, so a
-fresh clone needs it once:
+`make`, `make test` and `make bench` are self-contained. `make crosscheck`
+compiles the vendored upstream sources in `third_party/`, which include
+sse2neon as a submodule, so a fresh clone needs it once:
 
 ```
-git submodule update --init verus/sse2neon
+git submodule update --init third_party/verus/sse2neon
 ```
+
+See [`INSTALL.md`](INSTALL.md) to run a release build instead of building from
+source, and [`third_party/README.md`](third_party/README.md) for what is
+vendored and why.
+
+## Licence
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).
+
+The engine, the stratum client and the front end are written from the
+VerusHash 2.2 specification and link nothing else. The four files under
+`third_party/verus/` are used only by `make crosscheck`, carry their own
+Apache-2.0 and MIT notices, and are unmodified.
 
 ## vh22-top
 
@@ -90,8 +116,10 @@ solution byte 1329, because VerusHashHalf's final partial block is preimage
 bytes 1472..1486 and 1487 - 15 - 143 is 1329. Submitting the solution as
 `mining.notify` delivered it asks the pool to hash a preimage that was never
 mined. Every field is well formed, every length is right, and every share is
-rejected. `../verus/verusscan.cpp:517` is the specification: `work->extra +
-1332`, three bytes of CompactSize past 1329.
+rejected. The only specification for this is `record_solution` in the deployed
+ccminer-based miner's `verusscan.cpp`, which splices those fifteen bytes at
+`work->extra + 1332` — three bytes of CompactSize past solution byte 1329.
+That file is not vendored here; it is not needed to build or to cross-check.
 
 The same values travel in the header too -- the counting nonce at word 30 and
 the per-worker tag at word 32 -- so the two agree if a pool cross-checks them,
