@@ -108,6 +108,63 @@ int main(int argc, char **argv)
 	}
 	check(found, "found a share at the pool's target");
 
+	// The check the framing tests cannot make.
+	//
+	// A pool does not take our word for a share: it rebuilds the preimage from
+	// the job it issued plus the nonce and solution we submitted, hashes that,
+	// and compares. So do exactly that here. Submitting the solution as the
+	// pool issued it passes every structural test and still fails this one,
+	// which is how a build that "worked" against the mock was rejected by every
+	// real pool it ever touched.
+	if (found) {
+		uint8_t submitted[stratum::kSolutionBytes];
+		memcpy(submitted, job.solution, sizeof(submitted));
+		uint8_t space[stratum::kNonceSpaceBytes];
+		const uint32_t tag = 0;
+		memcpy(space, job.nonce_space, 7);
+		memcpy(space + 7, &tag, 4);
+		memcpy(space + 11, &found_nonce, 4);
+		memcpy(submitted + stratum::kNonceSpaceOffset, space, sizeof(space));
+
+		stratum::Job asPool = job;
+		memcpy(asPool.header + stratum::kNonceOffsetWord, &found_nonce, 4);
+		memcpy(asPool.header + 32, &tag, 4);
+		memcpy(asPool.solution, submitted, sizeof(submitted));
+
+		uint8_t pool_pre[stratum::kFullBytes];
+		asPool.build_preimage(pool_pre);
+		Template pool_tpl;
+		build_template(pool_tpl, pool_pre, stratum::kFullBytes);
+		Hasher ph(1);
+		ph.reset(pool_tpl);
+		uint8_t pool_hash[32];
+		ph.hash_exact(found_nonce, pool_hash);
+
+		uint8_t mined[32];
+		h.hash_exact(found_nonce, mined);
+		check(memcmp(pool_hash, mined, 32) == 0,
+		      "pool re-derives the same hash from the submission");
+		check(hash_meets_target((const uint32_t *)pool_hash, job.target),
+		      "the re-derived hash meets the target");
+
+		// A test that cannot fail proves nothing, and this one guards a bug
+		// that every structural check passed. Send the solution as the pool
+		// issued it -- the old behaviour -- and the re-derivation must land
+		// somewhere else entirely.
+		stratum::Job asSent = asPool;
+		memcpy(asSent.solution, job.solution, sizeof(submitted));
+		uint8_t unspliced_pre[stratum::kFullBytes];
+		asSent.build_preimage(unspliced_pre);
+		Template unspliced_tpl;
+		build_template(unspliced_tpl, unspliced_pre, stratum::kFullBytes);
+		Hasher uh(1);
+		uh.reset(unspliced_tpl);
+		uint8_t unspliced_hash[32];
+		uh.hash_exact(found_nonce, unspliced_hash);
+		check(memcmp(unspliced_hash, mined, 32) != 0,
+		      "an unspliced solution re-derives differently (the old bug)");
+	}
+
 	if (found) {
 		client.submit(job.serial, found_nonce, 0);
 		for (int i = 0; i < 100; ++i) {

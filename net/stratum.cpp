@@ -712,9 +712,29 @@ bool session(Conn &c)
 			snprintf(timehex, sizeof(timehex), "%08x",
 			         __builtin_bswap32(le32((const uint8_t *)&j.header[25])));
 
-			// solution: 3-byte CompactSize + the 1344 bytes, as the pool
-			// expects to splice it back into the block.
-			std::string sol = "fd4005" + tohex(j.solution, kSolutionBytes);
+			// The solution has to go back carrying the nonce we mined with.
+			//
+			// Sending it exactly as the pool issued it -- which is what this
+			// did -- asks the pool to re-derive the hash from a preimage we
+			// never hashed, because the bytes the engine varies are the last
+			// fifteen of the solution, not the header's nonce field. The
+			// framing was correct, every field was well formed, and every
+			// share was rejected. ../verus/verusscan.cpp:517 is the
+			// specification: work->extra + 1332, which is solution byte 1329.
+			uint8_t sol_bytes[kSolutionBytes];
+			memcpy(sol_bytes, j.solution, kSolutionBytes);
+			uint8_t space[kNonceSpaceBytes];
+			memcpy(space, j.nonce_space, 7);   // header words 27..28, the pool's
+			memcpy(space + 7, &s.tag, 4);      // header word 32, this worker's
+			memcpy(space + 11, &s.nonce, 4);   // the counting nonce
+			memcpy(sol_bytes + kNonceSpaceOffset, space, sizeof(space));
+
+			// 3-byte CompactSize + the 1344 bytes, as the pool expects to
+			// splice it back into the block. Solution bytes 8..71 are the MMR
+			// roots, zeroed for hashing by build_preimage but not here: this
+			// copy is the pristine one, so they are already what the pool
+			// needs back.
+			std::string sol = "fd4005" + tohex(sol_bytes, kSolutionBytes);
 
 			const uint64_t id = c.next_id++;
 			{

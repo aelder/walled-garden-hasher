@@ -91,11 +91,47 @@ class Session(threading.Thread):
         if not user:
             self.problems.append("empty worker name")
             ok = False
+        if ok:
+            ok = self.check_nonce_space(noncestr, solhex)
+        return ok
+
+    def check_nonce_space(self, noncestr, solhex):
+        """The check that framing alone cannot make.
+
+        Every field above can be perfectly well formed while the share is still
+        worthless, because the bytes the miner actually varies are not in the
+        header's nonce field -- from solution version 7 that field is zeroed
+        before hashing and the nonce rides in the last 15 bytes of the solution
+        instead. A miner that submits the solution exactly as it was issued is
+        asking the pool to hash a preimage it never solved, and a real pool
+        answers that by rejecting every single share.
+
+        This is a structural check, not a hash: the pool knows the nonce field
+        it will reconstruct, so it can require the solution tail to agree with
+        it. Mapping is verusscan.cpp:445-447 and :512.
+        """
+        sol = bytes.fromhex(solhex[6:])
+        nonce = bytes.fromhex(XNONCE1) + bytes.fromhex(noncestr)   # the full 32
+        tail = sol[1329:1344]
+        want = nonce[0:7] + nonce[20:24] + nonce[12:16]
+        if tail == self.pristine_tail:
+            self.problems.append(
+                "solution tail is unchanged from the job: the nonce space at "
+                "byte 1329 was never spliced in, so the pool would hash a "
+                "different preimage than the miner solved")
+            return False
+        if tail != want:
+            self.problems.append(
+                "solution tail %s disagrees with the submitted nonce field "
+                "(expected %s)" % (tail.hex(), want.hex()))
+            return False
+        ok = True
         return ok
 
     def run(self):
         buf = b""
         job = "job00000000000001"
+        self.pristine_tail = bytes.fromhex(make_solution(self.args.solution_version))[1329:1344]
         try:
             while True:
                 data = self.conn.recv(65536)

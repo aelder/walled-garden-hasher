@@ -23,6 +23,13 @@ enum : size_t {
 	kSolutionBytes = 1344,
 	kFullBytes = kHeaderBytes + 3 + kSolutionBytes,  // 1487, the hashed preimage
 	kNonceOffsetWord = 30,                           // VERUS_NONCE_OFFSET
+	// The nonce is not hashed where it sits in the header. VerusHashHalf's
+	// last partial block is the final 15 bytes of the preimage, which is the
+	// tail of the solution -- so that is where the miner's nonce space and
+	// counting nonce actually live, and what a pool re-derives the hash from.
+	// 1487 = 46*32 + 15, and 1487 - 15 - (140 + 3) = 1329.
+	kNonceSpaceOffset = 1329,   // within the solution
+	kNonceSpaceBytes = 15,      // 11 of nonce space, then the counting nonce
 };
 
 // Nothing here may wait forever. Every one of these bounds a state that a pool
