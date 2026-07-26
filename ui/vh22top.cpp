@@ -18,11 +18,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <string>
 #include <thread>
@@ -491,6 +493,84 @@ static std::vector<std::string> load_news()
 	return {kNewsFallback};
 }
 
+// --- the film ---------------------------------------------------------------
+//
+// An ASCII animation, played in the hashrate window by a keyboard sequence
+// nobody types by accident.
+//
+// The frames are not in this repository and will not be. The rendering this
+// was asked for carries no licence at all, its 30 MB includes the copyrighted
+// source video, and this tree is a seven-thousand-line miner that ships a
+// hundred-kilobyte tarball. So the player is here and the payload is not --
+// the same arrangement as the news ticker, and the same reason.
+//
+// Point VH22_FILM at a directory of frames, one per file, played in sorted
+// filename order. tools/make-film.sh will cut them from any video you have the
+// right to use.
+struct Film {
+	std::vector<std::vector<std::string>> frame;   // rows, as they were read
+	int w = 0, h = 0;
+	double fps = 24.0;
+	bool empty() const { return frame.empty(); }
+};
+
+static std::string film_dir()
+{
+	if (const char *env = getenv("VH22_FILM"))
+		return env;
+	const char *home = getenv("HOME");
+	return std::string(home ? home : ".") + "/.config/vh22/film";
+}
+
+// Bounded on purpose: a full-length animation at a generous resolution is tens
+// of megabytes of std::string, and this is a decoration inside a miner.
+enum : size_t { kFilmMaxBytes = 48u << 20, kFilmMaxFrames = 8192 };
+
+static bool load_film(Film &out)
+{
+	const std::string dir = film_dir();
+	DIR *d = opendir(dir.c_str());
+	if (!d)
+		return false;
+	std::vector<std::string> names;
+	while (struct dirent *e = readdir(d)) {
+		if (e->d_name[0] == '.')
+			continue;
+		names.push_back(e->d_name);
+	}
+	closedir(d);
+	if (names.empty())
+		return false;
+	std::sort(names.begin(), names.end());   // frame order is filename order
+
+	size_t bytes = 0;
+	for (const auto &n : names) {
+		if (out.frame.size() >= kFilmMaxFrames || bytes >= kFilmMaxBytes)
+			break;
+		FILE *f = fopen((dir + "/" + n).c_str(), "r");
+		if (!f)
+			continue;
+		std::vector<std::string> rows;
+		char line[4096];
+		while (fgets(line, sizeof(line), f)) {
+			std::string r(line);
+			while (!r.empty() && (r.back() == '\n' || r.back() == '\r'))
+				r.pop_back();
+			bytes += r.size() + sizeof(std::string);
+			if ((int)disp_len(r) > out.w)
+				out.w = disp_len(r);
+			rows.push_back(std::move(r));
+		}
+		fclose(f);
+		if (rows.empty())
+			continue;
+		if ((int)rows.size() > out.h)
+			out.h = (int)rows.size();
+		out.frame.push_back(std::move(rows));
+	}
+	return !out.frame.empty();
+}
+
 // --- app ------------------------------------------------------------------
 
 // Two Apple logos. The watermark takes the largest that fits the plot; the
@@ -823,6 +903,79 @@ struct App {
 		if (pool_scroll >= n) pool_scroll = n - 1;
 	}
 
+	// --- the film ---------------------------------------------------------
+	//
+	// Loaded on its own thread. Thousands of small files is a fraction of a
+	// second, but this UI has spent a lot of effort never blocking on anything
+	// and an easter egg is a poor place to start.
+	Film film;
+	std::thread film_loader;
+	std::atomic<bool> film_ready{false};
+	std::atomic<bool> film_loading{false};
+	bool playing = false;
+	double play_t0 = 0;
+	int konami = 0;
+
+	// Up Up Down Down Left Right Left Right B A. Arrows keep working as arrows
+	// while it is being entered -- the sequence rides along with the normal
+	// handling rather than swallowing it.
+	bool konami_feed(const Event &e)
+	{
+		static const Key kSeq[] = {Key::Up,   Key::Up,    Key::Down, Key::Down,
+		                           Key::Left, Key::Right, Key::Left, Key::Right,
+		                           Key::Char, Key::Char};
+		static const char kCh[] = {0, 0, 0, 0, 0, 0, 0, 0, 'b', 'a'};
+		const int n = (int)(sizeof(kSeq) / sizeof(*kSeq));
+		const bool hit = e.key == kSeq[konami] &&
+		                 (kSeq[konami] != Key::Char ||
+		                  (char)tolower((unsigned char)e.ch) == kCh[konami]);
+		if (hit) {
+			if (++konami < n)
+				return false;
+			konami = 0;
+			return true;
+		}
+		// A miss still starts a new sequence if it is itself the first key,
+		// otherwise Up Up Up Down... would never match.
+		konami = (e.key == kSeq[0]) ? 1 : 0;
+		return false;
+	}
+
+	void start_film()
+	{
+		if (playing)
+			return;
+		// Play now, decide what to play in a moment. The clock does not start
+		// until the frames are actually in hand, or the load time would be
+		// silently skipped over from the front of the film.
+		playing = true;
+		play_t0 = -1;
+		if (film_ready.load() || film_loading.load())
+			return;
+		film_loading.store(true);
+		film_loader = std::thread([this] {
+			Film f;
+			if (load_film(f))
+				film = std::move(f);
+			film_ready.store(true);
+			film_loading.store(false);
+		});
+	}
+
+	void stop_film()
+	{
+		playing = false;
+	}
+
+	// Frame for the current moment, or -1 once it has run out.
+	int film_frame() const
+	{
+		if (film.empty())
+			return -1;
+		const int i = (int)((now_s() - play_t0) * film.fps);
+		return i < (int)film.frame.size() ? i : -1;
+	}
+
 	bool pool_ready() const { return client.state() == stratum::State::Ready; }
 
 	// The refresh rate, and whether the user has taken it over. Until they
@@ -833,7 +986,13 @@ struct App {
 	Rate refresh = Rate::Normal;
 	bool refresh_pinned = false;
 
-	double redraw_period() const { return rate_period(refresh); }
+	double redraw_period() const
+	{
+		// The film needs frames; it is short, deliberate, and it ends.
+		if (playing)
+			return 1.0 / 24.0;
+		return rate_period(refresh);
+	}
 
 	// At the bottom of the range nothing that moves is drawn at all. Two
 	// seconds cannot carry motion, so the graphs hold their last frame and
@@ -1217,6 +1376,65 @@ struct App {
 			}
 	}
 
+	// Scaled to fit, not cropped. Nearest neighbour, aspect preserved, centred
+	// in whatever the plot area happens to be. Filling the width instead would
+	// read better on a tall window and cut the top and bottom off on this one,
+	// and the plot is about five times wider than it is tall -- so fitting is
+	// what keeps a whole frame on screen.
+	void draw_film(int gx, int gy, int gw, int gh)
+	{
+		const int fr = film_frame();
+		if (fr < 0 || gw <= 0 || gh <= 0)
+			return;
+		const std::vector<std::string> &rows = film.frame[(size_t)fr];
+		const int sw = film.w > 0 ? film.w : 1;
+		const int sh = (int)rows.size() > 0 ? (int)rows.size() : 1;
+
+		const double scale = std::min((double)gw / sw, (double)gh / sh);
+		const int dw = (int)(sw * scale), dh = (int)(sh * scale);
+		if (dw <= 0 || dh <= 0)
+			return;
+		const int ox = gx + (gw - dw) / 2, oy = gy + (gh - dh) / 2;
+
+		// Denser glyphs read as brighter. The source ramps are all some
+		// ordering of these, so weight by position and let anything unknown
+		// come out solid.
+		static const char *kRamp = " .\':;-~=+*!/?%&$@#MW";
+		for (int dy = 0; dy < dh; ++dy) {
+			const int sy = (int)((double)dy / scale);
+			if (sy < 0 || sy >= (int)rows.size())
+				continue;
+			const std::string &src = rows[(size_t)sy];
+			// One walk of the source row, picking columns as they come up:
+			// the frames may be UTF-8 and indexing bytes would halve a glyph.
+			int col = 0, dx = 0;
+			for (size_t i = 0; i < src.size() && dx < dw;) {
+				const unsigned char b = (unsigned char)src[i];
+				size_t len = 1;
+				if ((b & 0xE0) == 0xC0) len = 2;
+				else if ((b & 0xF0) == 0xE0) len = 3;
+				else if ((b & 0xF8) == 0xF0) len = 4;
+				if (i + len > src.size()) len = 1;
+				while (dx < dw && (int)((double)dx / scale) == col) {
+					if (b != ' ') {
+						const char *at = strchr(kRamp, (char)b);
+						const double lum = (b > 0x7F || !at)
+						                       ? 1.0
+						                       : (double)(at - kRamp) /
+						                             (double)(strlen(kRamp) - 1);
+						char g[5] = {0};
+						memcpy(g, src.data() + i, len);
+						frame.put(ox + dx, oy + dy, g,
+						          lerp(pal::kChrome, pal::kInk, lum));
+					}
+					++dx;
+				}
+				i += len;
+				++col;
+			}
+		}
+	}
+
 	void draw_graph(int x, int y, int w, int h)
 	{
 		const bool foc = false;
@@ -1241,6 +1459,33 @@ struct App {
 		frame.text(x + 2, gy + gh - 1, "0.00", pal::kDim);
 		for (int j = 0; j < gh; ++j)
 			frame.put(gx - 1, gy + j, "│", pal::kDim);
+
+		// The film owns the plot while it runs. Everything below it -- the
+		// readout row, the panel, the rest of the dashboard -- carries on.
+		if (playing) {
+			if (film_ready.load() && film.empty()) {
+				frame.text(gx + 1, gy + gh / 2,
+				           ellipsize("no frames in " + film_dir(), gw - 2),
+				           pal::kYellow);
+				frame.text(gx + 1, gy + gh / 2 + 1,
+				           ellipsize("tools/make-film.sh cuts them from a video",
+				                     gw - 2),
+				           pal::kDim);
+				return;
+			}
+			if (!film_ready.load()) {
+				frame.text(gx + 1, gy + gh / 2, "loading…", pal::kDim);
+				return;
+			}
+			if (play_t0 < 0)
+				play_t0 = now_s();
+			if (film_frame() < 0) {   // ran out; give the plot back
+				stop_film();
+			} else {
+				draw_film(gx, gy, gw, gh);
+				return;
+			}
+		}
 
 		const std::vector<int> fill = plot_fill_dots(gw, gh, hist, vmax);
 		PlotMask occlude;
@@ -2157,6 +2402,15 @@ struct App {
 			return true;
 		}
 
+		// Playing: the next key puts the plot back. Checked before the
+		// sequence so the last A of a second entry does not restart it.
+		if (playing && e.key != Key::None && e.key != Key::Resize) {
+			stop_film();
+			return true;
+		}
+		if (konami_feed(e))
+			start_film();
+
 		switch (e.key) {
 		case Key::Up: focus = step_focus(focus, -1); break;
 		case Key::Down:
@@ -2296,6 +2550,8 @@ struct App {
 		}
 		engine.stop();
 		client.stop();
+		if (film_loader.joinable())
+			film_loader.join();
 		term.end();
 		return 0;
 	}

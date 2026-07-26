@@ -77,5 +77,6 @@ last actual failure, because a retry cycle spends most of its time saying
 |---|---|
 | `~/.config/vh22/config` | identity and pools, mode 0600 — it names the wallet being mined to |
 | `~/.config/vh22/news.md` | ticker copy, if you want your own; `$VH22_NEWS` overrides |
+| `~/.config/vh22/film` | frames for the easter egg; `tools/make-film.sh` makes them, `$VH22_FILM` overrides |
 
 No wallet and no private key are stored, only the payout address.

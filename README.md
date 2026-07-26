@@ -107,6 +107,19 @@ counts, every two seconds. Input is never affected: poll() keeps its own short
 timeout and a keystroke repaints immediately, so at any rate the keyboard
 answers in about a millisecond.
 
+There is an easter egg. The Konami code plays an ASCII animation in the
+hashrate window, scaled to fit and centred -- fitting rather than filling,
+because the plot is about five times wider than it is tall and a filled frame
+would lose its top and bottom.
+
+No frames ship with this repository and none will: the rendering this was
+modelled on carries no licence at all and its 30 MB includes the source video.
+The player is here, the payload is not, exactly as with the ticker copy.
+`tools/make-film.sh` cuts frames from any video you have the right to use, into
+`~/.config/vh22/film` or wherever `$VH22_FILM` points. Loaded on its own thread,
+so triggering it never blocks the UI, and with nothing to play it says so and
+names the directory it looked in.
+
 Minimum window is 60x19, which is where the dashboard is genuinely drawable;
 below that it says so and names the size you have. The Apple watermark in the
 plot needs about 38 rows, and the full-size one about 49.
