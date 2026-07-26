@@ -36,10 +36,39 @@ Cores are never dimmed to imply a thread is bound to one: macOS has no
 thread-to-core pinning API, so workers land wherever the scheduler puts them
 and every meter shows real load. The panel says so.
 
-Pools are stored in `~/.config/vh22/pools.conf` at mode 0600. Select one,
-press Connect, and the run control becomes "Start mining": workers rebuild
-their template on each new job and submit at the pool's target, with accepted,
-stale and rejected counts live in the panel.
+Identity and pools live in `~/.config/vh22/config` at mode 0600 -- it names the
+wallet being mined to, and nothing else. The payout address is asked for once,
+on first run, and composed with the rig name into the stratum user; switching
+pools then costs one keystroke instead of retyping it. Selecting a pool tests
+it there and then, so there is no separate Connect step and the dashboard is
+already reporting the truth by the time you are back on it.
+
+MINE is only offered once the pool is verified *and* holding work. Everything
+below turns on that distinction:
+
+- Nothing waits indefinitely. The connect, the handshake, the first job and
+  continued silence are all bounded (`kConnectTimeoutMs` and friends in
+  `net/stratum.h`), and stop() never blocks the UI thread even when a pool is
+  a black hole.
+- The status row says what the client is doing this second; a separate `⚠` row
+  keeps the last actual failure, because a retry cycle spends most of its time
+  saying "connecting" and the diagnosis would otherwise be on screen for about
+  a second in ten.
+- Intent is never reported as state. If the pool dies mid-run the label reads
+  STALLED and the readout `◌ stalled`, rather than an animated MINING over a
+  hashrate of zero.
+
+Accepted, stale and rejected counts are live in the panel, and the logo carries
+a diagonal gloss sweep while work is actually being done -- it goes still when
+the pool does.
+
+A one-row news ticker sits between the header and the plot, holding each
+screenful still long enough to read and sliding right to left between them. Its
+copy is `ui/news.md`, read at runtime.
+
+Minimum window is 60x19, which is where the dashboard is genuinely drawable;
+below that it says so and names the size you have. The Apple watermark in the
+plot needs about 38 rows, and the full-size one about 49.
 
 ## Stratum
 
@@ -54,9 +83,19 @@ merkle root, sapling root, nBits and the whole 32-byte nonce are zeroed, and
 the identifying data rides in the solution's nonce space instead. Get it wrong
 and the pool rejects every share without explaining why.
 
-Two words have to travel back with a share exactly where the miner had them,
-or the pool re-derives a different hash: the counting nonce at header word 30
-and the per-worker tag at word 32.
+Which means the share's **solution** is what has to carry the nonce, and this
+is the part that cost a release. The bytes the engine varies are the last
+fifteen of the solution -- eleven of nonce space then the counting nonce, at
+solution byte 1329, because VerusHashHalf's final partial block is preimage
+bytes 1472..1486 and 1487 - 15 - 143 is 1329. Submitting the solution as
+`mining.notify` delivered it asks the pool to hash a preimage that was never
+mined. Every field is well formed, every length is right, and every share is
+rejected. `../verus/verusscan.cpp:517` is the specification: `work->extra +
+1332`, three bytes of CompactSize past 1329.
+
+The same values travel in the header too -- the counting nonce at word 30 and
+the per-worker tag at word 32 -- so the two agree if a pool cross-checks them,
+but it is the solution the hash is taken over.
 
 The client reconnects on its own: backoff doubles from one second to thirty
 and resets whenever a session actually reached Ready, so a stable pool that
@@ -70,6 +109,16 @@ that **validates** what the miner sends rather than accepting it -- submit
 parameter count, nonce length against the extranonce it issued, the fd4005
 CompactSize prefix, hex validity. It also covers the accepted, stale and
 rejected paths so the share accounting is exercised, not just the happy one.
+
+Shape is not enough, though, and believing it was is how the unspliced solution
+shipped: every structural check above passes on a share that no pool will ever
+accept. So both ends now check meaning. The mock reconstructs the nonce field
+it would rebuild and requires the solution tail to agree with it. The test does
+what a pool does -- rebuilds the preimage from the job plus the submitted nonce
+and solution, hashes it, and checks it lands on the digest the miner solved and
+meets the target -- and then submits the unspliced solution and asserts the
+re-derivation lands somewhere else, because a test that cannot fail proves
+nothing.
 
 ## Layout
 
