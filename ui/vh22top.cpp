@@ -575,7 +575,57 @@ static const char *rate_label(Rate r)
 	}
 }
 
-enum class Screen { Dashboard, Pools, EditPool, Setup };
+enum class Screen { Dashboard, Pools, EditPool, Setup, Help };
+
+// The key reference. Every binding the UI has, glossed short enough that the
+// whole thing is one screen -- a help page that scrolls is a manual, and
+// nobody reads a manual to find out what an arrow key does.
+struct HelpKey {
+	const char *key;
+	const char *what;
+};
+struct HelpSection {
+	const char *title;
+	const HelpKey *rows;
+	int n;
+};
+
+static const HelpKey kHelpDash[] = {
+	{"↑ ↓", "move between controls"},
+	{"← →", "adjust the one in focus"},
+	{"⏎", "start or stop, or open the list"},
+	{"+ −", "refresh rate; see below"},
+	{"i", "set the payout address"},
+	{"q", "quit"},
+};
+static const HelpKey kHelpPools[] = {
+	{"↑ ↓", "move"},
+	{"⏎", "select it, and test it now"},
+	{"e", "edit host and port"},
+	{"n", "add a pool"},
+	{"d", "delete"},
+	{"esc", "back"},
+};
+static const HelpKey kHelpForm[] = {
+	{"↑ ↓", "next field"},
+	{"⏎", "save"},
+	{"esc", "cancel"},
+};
+// Four words the dashboard puts on screen without explaining.
+static const HelpKey kHelpTerms[] = {
+	{"threads", "workers; every core by default"},
+	{"lanes", "nonces per pass, 64 unless memory is tight"},
+	{"verified", "pool answered, set a target, sent work"},
+	{"freeze", "graphs hold, shares and hashrate carry on"},
+};
+
+static const HelpSection kHelp[] = {
+	{"Dashboard", kHelpDash, (int)(sizeof(kHelpDash) / sizeof(*kHelpDash))},
+	{"Pool list", kHelpPools, (int)(sizeof(kHelpPools) / sizeof(*kHelpPools))},
+	{"Address and pool forms", kHelpForm, (int)(sizeof(kHelpForm) / sizeof(*kHelpForm))},
+	{"What they mean", kHelpTerms, (int)(sizeof(kHelpTerms) / sizeof(*kHelpTerms))},
+};
+
 enum Focus { F_THREADS = 0, F_LANES, F_BENCH, F_MINE, F_POOLS, F_COUNT };
 enum class Mode { Idle, Mining, Benchmark };
 
@@ -1594,7 +1644,7 @@ struct App {
 		const int lw = W / 2;
 		draw_cores(0, y, lw, bot);
 		draw_pool_panel(lw, y, W - lw, bot);
-		help(" ↑↓ move   ←→ adjust   ⏎ select   +- refresh   i address   q quit ");
+		help(" ↑↓ move   ←→ adjust   ⏎ select   +- refresh   ? help   q quit ");
 	}
 
 	// Pick a pool. That is the whole screen: the wallet is already known, so
@@ -1663,7 +1713,7 @@ struct App {
 		           ellipsize("the endpoint is editable — press e if a pool has moved",
 		                     W - 20),
 		           pal::kDim);
-		help(" ↑↓ move   ⏎ select   e edit   n new   d delete   i identity   esc back ");
+		help(" ↑↓ move   ⏎ select   e edit   n new   d delete   ? help   esc back ");
 	}
 
 	void draw_edit()
@@ -1742,6 +1792,77 @@ struct App {
 		                       : " ↑↓ field   type to enter   ⏎ save ");
 	}
 
+	// Everything the UI answers to, on one screen. Two columns when the window
+	// can carry them, one when it cannot -- and the sections are ordered so
+	// that a single narrow column still leads with the dashboard, which is
+	// where anyone pressing ? is standing.
+	Screen help_from = Screen::Dashboard;
+
+	void draw_help_screen()
+	{
+		const int W = frame.width(), H = frame.height();
+		window(frame, 0, 0, W, H - 1, "Controls", true, pal::kGreen);
+
+		const int top = 2, last = H - 4;      // above the footer line
+		const int avail = last - top + 1;
+		const int nsec = (int)(sizeof(kHelp) / sizeof(*kHelp));
+
+		// Decide the split from how much there is to say, not from how wide
+		// the window is. Two columns on a window that did not need them halves
+		// the room for every description and leaves the right half empty.
+		int total = 0;
+		for (const auto &sec : kHelp)
+			total += sec.n + 2;
+		--total;                              // no trailing blank
+		const bool two = total > avail && W >= 84;
+		const int cols = two ? 2 : 1;
+		const int cw = (W - 6) / cols;
+		const int keyw = 10;
+
+		// Balance the columns on section boundaries.
+		int split = nsec;
+		if (two) {
+			int run = 0;
+			for (int i = 0; i < nsec; ++i) {
+				run += kHelp[i].n + 2;
+				if (run >= total / 2) { split = i + 1; break; }
+			}
+		}
+
+		int dropped = 0;
+		int ty[2] = {top, top};
+		for (int i = 0; i < nsec; ++i) {
+			const HelpSection &sec = kHelp[i];
+			const int col = (two && i >= split) ? 1 : 0;
+			const int cx = 4 + col * cw;
+			if (ty[col] + sec.n > last) {     // no room for the heading and one row
+				dropped += sec.n;
+				continue;
+			}
+			frame.text(cx, ty[col]++, ellipsize(sec.title, cw - 2), pal::kYellow,
+			           pal::kPanel, true);
+			for (int r = 0; r < sec.n; ++r) {
+				if (ty[col] > last) { ++dropped; continue; }
+				frame.text(cx + 1, ty[col], sec.rows[r].key, pal::kInk, pal::kPanel,
+				           true);
+				frame.text(cx + 1 + keyw, ty[col],
+				           ellipsize(sec.rows[r].what, cw - keyw - 3), pal::kLabel);
+				++ty[col];
+			}
+			++ty[col];
+		}
+
+		// Never silently short-change it: a help screen missing the half you
+		// needed is worse than one that admits it.
+		const std::string foot =
+			dropped ? "a taller window shows " + std::to_string(dropped) + " more"
+			        : "the payout address is the only thing stored; no wallet, "
+			          "no private key";
+		frame.text(4, H - 3, ellipsize(foot, W - 8),
+		           dropped ? pal::kYellow : pal::kDim);
+		help(" any key to go back ");
+	}
+
 	void help(const std::string &s)
 	{
 		const int H = frame.height(), W = frame.width();
@@ -1799,6 +1920,16 @@ struct App {
 
 	bool on_key(const Event &e)
 	{
+		if (screen == Screen::Help) {
+			// Any key closes it. Nothing on this screen is worth a second
+			// keystroke to leave.
+			if (e.key == Key::Quit)
+				return false;
+			if (e.key != Key::None && e.key != Key::Resize)
+				screen = help_from;
+			return true;
+		}
+
 		if (screen == Screen::Setup) {
 			std::string *v[2] = {&id_draft.address, &id_draft.rig};
 			switch (e.key) {
@@ -2013,6 +2144,9 @@ struct App {
 					}
 					clamp_pools();
 					save_settings(cfg);
+				} else if (e.ch == '?' || e.ch == 'h') {
+					help_from = Screen::Pools;
+					screen = Screen::Help;
 				} else if (e.ch == 'q') {
 					return false;
 				}
@@ -2082,6 +2216,10 @@ struct App {
 				nudge_rate(+1);
 			if (e.ch == '-' || e.ch == '_')
 				nudge_rate(-1);
+			if (e.ch == '?' || e.ch == 'h') {
+				help_from = Screen::Dashboard;
+				screen = Screen::Help;
+			}
 			break;
 		case Key::Quit: return false;
 		default: break;
@@ -2145,6 +2283,8 @@ struct App {
 					                           term.width() - 2), pal::kDim);
 			} else if (screen == Screen::Dashboard) {
 				draw_dashboard();
+			} else if (screen == Screen::Help) {
+				draw_help_screen();
 			} else if (screen == Screen::Pools) {
 				draw_pools();
 			} else if (screen == Screen::Setup) {
@@ -2178,6 +2318,7 @@ static void usage(FILE *f)
 	        "  ←→      adjust threads and lanes\n"
 	        "  ⏎       select, or start and stop\n"
 	        "  + -     refresh rate: 100ms, 300ms, freeze\n"
+	        "  ?       every control, explained, in the app\n"
 	        "  i       set the payout address\n"
 	        "  q       quit\n"
 	        "\n"

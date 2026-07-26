@@ -65,6 +65,7 @@ last actual failure, because a retry cycle spends most of its time saying
 | `↑` `↓` | move between controls |
 | `←` `→` | adjust threads and lanes |
 | `⏎` | select, or start and stop |
+| `?` | every control, explained, on one screen |
 | `+` `-` | refresh rate: 100ms, 300ms, freeze |
 | `i` | set the payout address |
 | `e` `n` `d` | edit, add, delete a pool (in the pool list) |
