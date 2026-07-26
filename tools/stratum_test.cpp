@@ -111,21 +111,21 @@ int main(int argc, char **argv)
 	if (found) {
 		client.submit(job.serial, found_nonce, 0);
 		for (int i = 0; i < 100; ++i) {
-			if (client.stats().submitted.load())
+			if (client.stats().submitted)
 				break;
 			usleep(50000);
 		}
-		check(client.stats().submitted.load() == 1, "share submitted");
+		check(client.stats().submitted == 1, "share submitted");
 
 		for (int i = 0; i < 100; ++i) {
-			if (client.stats().accepted.load() || client.stats().rejected.load() ||
-			    client.stats().stale.load())
+			if (client.stats().accepted || client.stats().rejected ||
+			    client.stats().stale)
 				break;
 			usleep(50000);
 		}
-		const uint64_t a = client.stats().accepted.load();
-		const uint64_t r = client.stats().rejected.load();
-		const uint64_t s = client.stats().stale.load();
+		const uint64_t a = client.stats().accepted;
+		const uint64_t r = client.stats().rejected;
+		const uint64_t s = client.stats().stale;
 		printf("  accounting: accepted %llu rejected %llu stale %llu\n",
 		       (unsigned long long)a, (unsigned long long)r, (unsigned long long)s);
 		check(a + r + s == 1, "exactly one share accounted");

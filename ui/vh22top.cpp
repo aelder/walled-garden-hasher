@@ -203,14 +203,25 @@ private:
 		uint32_t nonce = 0, high = 0;
 		uint32_t target[8] = {0};
 		while (g_running.load(std::memory_order_relaxed)) {
-			stratum::Job j;
-			if (!pool_->current(j) || !j.valid) {
+			// One relaxed load per wave. current() takes a lock and copies the
+			// 1.5 KB Job, which at ~400k waves/s is not something to do on the
+			// hot path just to ask whether anything changed.
+			const uint64_t live = pool_->job_serial();
+			if (!live) {
+				// No minable work: the pool is down, reconnecting, or has not
+				// sent any. Idle rather than grinding a job we know is dead.
+				serial = 0;
 				usleep(50000);
 				continue;
 			}
-			if (j.serial != serial) {
+			if (live != serial) {
 				// New job: rebuild the per-template state. The 276 chained
 				// Haraka256 of key expansion happen here, once, not per nonce.
+				stratum::Job j;
+				if (!pool_->current(j) || !j.valid) {
+					usleep(20000);
+					continue;
+				}
 				serial = j.serial;
 				uint8_t pre[stratum::kFullBytes];
 				j.build_preimage(pre);
@@ -245,20 +256,6 @@ private:
 	std::vector<Worker> workers_;
 };
 
-// --- share accounting -----------------------------------------------------
-//
-// Populated by the stratum client. accepted/rejected come from the
-// mining.submit response, stale from the pool rejecting a share whose job has
-// moved on, difficulty from mining.set_target. None of it is observable
-// locally, which is why it is all still zero.
-struct ShareStats {
-	bool connected = false;
-	uint64_t accepted = 0, rejected = 0, stale = 0;
-	double difficulty = 0;
-	double last_share_s = -1;   // seconds since; negative means never
-	double connected_since = 0;
-};
-
 // --- identity and pools ---------------------------------------------------
 //
 // Most miners make you retype your wallet address into every pool entry. It is
@@ -274,6 +271,24 @@ struct Identity {
 	std::string user() const
 	{
 		return rig.empty() ? address : address + "." + rig;
+	}
+	// Pools pay to a transparent R-address, to a VerusID (i-address), or to an
+	// identity name ending in @. Anything else is almost certainly a paste
+	// accident, and the pool's only answer is a flat authorize rejection --
+	// which arrives long after the moment the user could have spotted it.
+	const char *shape() const
+	{
+		if (address.empty())
+			return nullptr;
+		if (address.find_first_of(" \t") != std::string::npos)
+			return "an address cannot contain spaces";
+		if (address.back() == '@')
+			return nullptr;
+		if (address[0] == 'R' && address.size() == 34)
+			return nullptr;
+		if (address[0] == 'i' && address.size() == 34)
+			return nullptr;
+		return "expected R…, i… (34 characters) or a name@";
 	}
 	// Addresses are 34 characters and do not fit next to anything.
 	std::string shortened() const
@@ -459,6 +474,11 @@ static const char *const kLogoLargeRows[] = {
 static const LogoArt kLogoSmall = {7, kLogoSmallRows};
 static const LogoArt kLogoLarge = {17, kLogoLargeRows};
 
+// Where the dashboard stops being drawable: header 4 + graph 5 + panels 9 +
+// help 1. Below the panel floor the controls leave the screen while focus can
+// still reach them, which is worse than refusing to draw.
+enum : int { kMinW = 60, kMinH = 19 };
+
 enum class Screen { Dashboard, Pools, EditPool, Setup };
 enum Focus { F_THREADS = 0, F_LANES, F_BENCH, F_MINE, F_POOLS, F_COUNT };
 enum class Mode { Idle, Mining, Benchmark };
@@ -588,10 +608,94 @@ struct App {
 	GlyphKinetics kin;
 	Dust dust;
 	Settings cfg;
-	int pool_cursor = 0, field = 0;
+	int pool_cursor = 0, field = 0, pool_scroll = 0;
 	Pool draft;
 	Identity id_draft;
+	// A row being added does not exist in the list yet, so the cursor must not
+	// be parked past the end to represent it. That is what let Escape leave an
+	// out-of-range cursor that the next keystroke read straight off the end.
+	bool editing_new = false;
+	int pending_pool = -1;   // pool to select once an address is finally set
+	std::string form_err;    // inline, on the form that caused it
+
+	// The transient line in the bottom bar. It expires, because a message that
+	// never clears stops being about now.
 	std::string status;
+	Rgb status_col = pal::kGreen;
+	double status_until = 0;
+
+	void note(const std::string &s, bool err = false)
+	{
+		status = s;
+		status_col = err ? pal::kRed : pal::kGreen;
+		status_until = now_s() + (err ? 10.0 : 4.0);
+	}
+
+	// Every path that can move or delete a row goes through this. The indices
+	// are used to subscript the vector on the very next frame.
+	void clamp_pools()
+	{
+		const int n = (int)cfg.pools.size();
+		if (n <= 0) {
+			cfg.selected = pool_cursor = pool_scroll = 0;
+			cfg.chosen = false;
+			return;
+		}
+		if (cfg.selected < 0 || cfg.selected >= n) cfg.selected = 0;
+		if (pool_cursor < 0) pool_cursor = 0;
+		if (pool_cursor >= n) pool_cursor = n - 1;
+		if (pool_scroll < 0) pool_scroll = 0;
+		if (pool_scroll >= n) pool_scroll = n - 1;
+	}
+
+	bool pool_ready() const { return client.state() == stratum::State::Ready; }
+
+	// The single source of truth for "what is going on with the pool". The bug
+	// this replaces was a status line that reported the user's *intent*
+	// (mode == Mining) as though it were the pool's state, so a pool that had
+	// been dead for half an hour still rendered as a healthy green "mining".
+	struct StatusLine {
+		const char *glyph;
+		std::string text;
+		Rgb col;
+	};
+	StatusLine pool_status() const
+	{
+		if (!cfg.chosen || cfg.pools.empty())
+			return {"○ ", "no pool selected", pal::kDim};
+		if (!cfg.id.complete())
+			return {"! ", "no payout address — press i", pal::kRed};
+		if (!client.running())
+			return {"○ ", "not connected", pal::kRed};
+
+		const stratum::State st = client.state();
+		if (st == stratum::State::Ready)
+			return {"● ", mode == Mode::Mining ? "mining" : "verified", pal::kGreen};
+
+		// Short, and about now. The diagnosis is a separate line with the whole
+		// panel width, so repeating it here only costs the room that would have
+		// shown what the client is doing this second.
+		const char *word;
+		switch (st) {
+		case stratum::State::Resolving:   word = "resolving"; break;
+		case stratum::State::Connecting:  word = "connecting"; break;
+		case stratum::State::Subscribing: word = "subscribing"; break;
+		case stratum::State::Authorizing: word = "authorizing"; break;
+		case stratum::State::Waiting:     word = "waiting for work"; break;
+		case stratum::State::Failed:      word = "not connected"; break;
+		default:                          word = "connecting"; break;
+		}
+		std::string text = word;
+		// A countdown belongs inline: it is the one part of the note that
+		// answers "is it doing anything, or is it stuck?".
+		const std::string n = client.status_text();
+		const size_t r = n.find("retry in ");
+		if (r != std::string::npos)
+			text = "retrying in " + n.substr(r + 9);
+		if (mode == Mode::Mining || st == stratum::State::Failed)
+			return {"! ", text, pal::kRed};
+		return {"◐ ", text, pal::kLabel};
+	}
 
 	void init()
 	{
@@ -604,6 +708,7 @@ struct App {
 				cfg.pools.push_back(p);
 			cfg.selected = 0;
 		}
+		clamp_pools();
 		if (!cfg.id.complete()) {
 			id_draft = cfg.id;
 			screen = Screen::Setup;
@@ -620,14 +725,21 @@ struct App {
 	}
 
 	// A chosen pool is tested, always. Nothing else explains a status line.
+	// stop() no longer waits on the network, so calling this from a keystroke
+	// cannot stall the UI even if the previous pool is a black hole.
 	void connect_selected()
 	{
 		client.stop();
-		if (!cfg.chosen || !cfg.id.complete() || cfg.pools.empty())
+		clamp_pools();
+		if (!cfg.chosen || cfg.pools.empty())
 			return;
+		if (!cfg.id.complete()) {
+			note("set your payout address first — press i", true);
+			return;
+		}
 		const Pool &p = cfg.pools[(size_t)cfg.selected];
 		if (p.host.empty()) {
-			status = "that pool has no host";
+			note("\"" + p.label + "\" has no host — press e to set one", true);
 			return;
 		}
 		stratum::Config sc;
@@ -636,6 +748,18 @@ struct App {
 		sc.user = cfg.id.user();
 		sc.pass = "x";
 		client.start(sc);
+		note("testing " + p.label);
+	}
+
+	// Mining and a pool connection are separate things; stopping one has to
+	// stop the other cleanly wherever the pool identity changes underneath.
+	void stop_mining()
+	{
+		if (mode != Mode::Mining)
+			return;
+		engine.stop();
+		engine.set_pool(nullptr);
+		mode = Mode::Idle;
 	}
 
 	void tick()
@@ -648,12 +772,19 @@ struct App {
 			last_hashes = h;
 			last_t = t;
 			if (engine.active()) {
+				// The plot always tells the truth, including the drop to zero
+				// when the pool goes away -- that dip is the signal.
 				hist.erase(hist.begin());
 				hist.push_back(rate);
 				if (rate > peak)
 					peak = rate;
-				avg_acc += rate;
-				++avg_n;
+				// The average describes how fast this machine hashes, so only
+				// sample it while there is work. Averaging in the zeros of an
+				// outage decays it towards nothing and describes neither.
+				if (mode == Mode::Benchmark || pool_ready()) {
+					avg_acc += rate;
+					++avg_n;
+				}
 			}
 		}
 		load.sample(sys.ncpu);
@@ -674,22 +805,43 @@ struct App {
 
 		// The machine is the headline, in the block face. Read from sysctl
 		// rather than hard-coded, so it says whatever silicon it is running on.
+		//
+		// `last` is the final row inside the border. Every write is bounded by
+		// it: three lines were being written into a four-row window, so the
+		// machine summary landed on top of the bottom border.
+		const int last = y + h - 2;
+		const int tw = w - 6;
 		int ty = y + 1;
+		auto line = [&](const std::string &s, Rgb col, bool bold) {
+			if (ty <= last)
+				frame.text(x + 3, ty++, ellipsize(s, tw), col, pal::kPanel, bold);
+		};
+
 		const int bw = block_text_width(sys.model);
 		if (h >= 8 && bw <= w - 6) {
 			block_text(frame, x + 3, ty, sys.model, pal::kInk);
 			ty += kBlockRows;
 		} else {
-			frame.text(x + 3, ty++, sys.model, pal::kInk, pal::kPanel, true);
+			line(sys.model, pal::kInk, true);
 		}
 
 		char b[160];
-		frame.text(x + 3, ty++, "VerusHash 2.2  ·  AArch64", pal::kLabel);
 		snprintf(b, sizeof(b), "%d cores  ·  %dP + %dE  ·  %.0f GB", sys.ncpu, sys.nperf,
 		         sys.neff, sys.mem_gb);
-		frame.text(x + 3, ty++, b, pal::kLabel);
-		if (h >= 6)
-			rainbow_rule(frame, x + 2, y + h - 2, w - 4);
+		if (last - ty >= 1) {
+			line("VerusHash 2.2  ·  AArch64", pal::kLabel, false);
+			line(b, pal::kLabel, false);
+		} else {
+			// One row left: fold the two lines into the one that identifies
+			// both the algorithm and the machine.
+			char c[200];
+			snprintf(c, sizeof(c), "VerusHash 2.2  ·  %d cores  ·  %dP + %dE", sys.ncpu,
+			         sys.nperf, sys.neff);
+			line(c, pal::kLabel, false);
+		}
+		// Only if a row is genuinely spare, for the same reason.
+		if (h >= 6 && ty <= last)
+			rainbow_rule(frame, x + 2, last, w - 4);
 	}
 
 	// The logo stands in the plot rather than under it: its glyphs occlude the
@@ -796,8 +948,13 @@ struct App {
 				vmax = v;
 		vmax *= 1.15;
 
-		// Scale ticks, top and bottom.
-		frame.text(x + 2, gy, mhs(vmax), pal::kDim);
+		// Scale ticks, top and bottom. With no data the top of the scale is an
+		// artefact of the floor, and printing it as 0.00 above a 0.00 baseline
+		// reads as a broken axis rather than an empty one.
+		bool any = false;
+		for (double v : hist)
+			if (v > 0) { any = true; break; }
+		frame.text(x + 2, gy, any ? mhs(vmax) : "—", pal::kDim);
 		frame.text(x + 2, gy + gh - 1, "0.00", pal::kDim);
 		for (int j = 0; j < gh; ++j)
 			frame.put(gx - 1, gy + j, "│", pal::kDim);
@@ -817,11 +974,16 @@ struct App {
 		rx = frame.text(rx, ry, mhs(peak), pal::kYellow, pal::kPanel, true);
 		rx = frame.text(rx + 3, ry, "avg ", pal::kLabel);
 		rx = frame.text(rx, ry, avg_n ? mhs(avg_acc / (double)avg_n) : "0.00", pal::kInk);
-		const char *what = mode == Mode::Mining     ? "● mining"
+		// Intent is not state. "mining" here has to mean hashes are being
+		// produced against real work, or the readout is decoration.
+		const bool stalled = mode == Mode::Mining && !pool_ready();
+		const char *what = stalled                  ? "◌ stalled"
+		                 : mode == Mode::Mining     ? "● mining"
 		                 : mode == Mode::Benchmark ? "● benchmark"
 		                                           : "○ idle";
 		rx = frame.text(rx + 3, ry, what,
-		                mode == Mode::Idle ? pal::kDim : pal::kGreen);
+		                stalled ? pal::kRed
+		                        : (mode == Mode::Idle ? pal::kDim : pal::kGreen));
 	}
 
 	void draw_cores(int x, int y, int w, int h)
@@ -841,14 +1003,17 @@ struct App {
 		const int top_pad = (rows > per) ? (rows - per) / 2 : 0;
 		const int cw = (w - 6) / cols;
 		const int mw = cw - 10;
+		int hidden = 0;
 		for (int i = 0; i < sys.ncpu; ++i) {
 			// Centre the block between the title and the controls, so the
 			// slack on a machine with few cores reads as symmetric padding
 			// rather than a gap above the controls.
 			const int cx = x + 3 + (i / per) * cw;
 			const int cy = y + 2 + top_pad + (i % per);
-			if (i % per >= rows)
+			if (i % per >= rows || rows <= 0) {
+				++hidden;
 				continue;
+			}
 			// Performance cores are listed first even though Apple numbers
 			// them last.
 			const int cpu = sys.nperf ? ((i < sys.nperf) ? sys.pbase + i : i - sys.nperf)
@@ -865,6 +1030,15 @@ struct App {
 			char pc[8];
 			snprintf(pc, sizeof(pc), "%3d%%", (int)(u * 100));
 			frame.text(cx + 4 + (mw > 2 ? mw : 0), cy, pc, lerp(pal::kDim, hi, 0.4 + u * 0.6));
+		}
+
+		// Silently dropping cores makes a short window look like a machine
+		// with fewer cores than it has.
+		if (hidden > 0 && rows > 0) {
+			char more[48];
+			snprintf(more, sizeof(more), "+%d more — taller window to see them", hidden);
+			frame.text(x + 3, y + 2 + (rows > 0 ? rows - 1 : 0),
+			           ellipsize(more, w - 6), pal::kDim);
 		}
 
 		// Three controls, one per row, each on its own line with a gap either
@@ -909,17 +1083,32 @@ struct App {
 	// >START< while the pool is ready, !ACTIVE! once mining -- flipped one
 	// glyph at a time on staggered timers, each then shimmering on its own
 	// phase so the word reads as working rather than as a static label.
-	void draw_run_label(int x, int y, bool pool_ready, bool mining, bool foc)
+	// `w` is the room from x to the panel border. The trailing note used to be
+	// written unbounded and ran straight through the right-hand border on a
+	// narrow panel.
+	void draw_run_label(int x, int y, int w, bool ready, bool mining, bool foc)
 	{
 		static const char *kReady = ">MINE<";
 		static const char *kActive = "!MINING!";
 		if (foc)
-			frame.text(x - 2, y, "▸", mining || pool_ready ? pal::kGreen : pal::kDim);
-		if (!pool_ready && !mining) {
+			frame.text(x - 2, y, "▸", mining || ready ? pal::kGreen : pal::kDim);
+		if (mining && !ready) {
+			// The workers are up but there is no work to give them. An
+			// animated !MINING! here is the difference between noticing a dead
+			// pool and leaving the machine running all night for nothing.
+			frame.text(x, y, "STALLED", pal::kRed, pal::kPanel, true);
+			if (w > 18)
+				frame.text(x + 9, y, ellipsize("⏎ to stop", w - 9), pal::kDim);
+			return;
+		}
+		if (!ready && !mining) {
 			frame.text(x, y, "mine", pal::kDim);
-			frame.text(x + 6, y,
-			           cfg.chosen ? "(waiting for the pool)" : "(select a pool)",
-			           pal::kDim);
+			if (w > 10)
+				frame.text(x + 6, y,
+				           ellipsize(cfg.chosen ? "(waiting for the pool)"
+				                                : "(select a pool)",
+				                     w - 6),
+				           pal::kDim);
 			return;
 		}
 		if (!mining) {
@@ -967,89 +1156,129 @@ struct App {
 	// A dash reads as "no value yet" without pretending the field is absent.
 	static std::string dash(bool have, const std::string &v) { return have ? v : "—"; }
 
-	void stat(int x, int y, const std::string &k, const std::string &v, Rgb col)
+	// `w` is the width available from x, so a long value stops at the panel
+	// border instead of eating it.
+	void stat(int x, int y, int w, const std::string &k, const std::string &v, Rgb col)
 	{
 		frame.text(x, y, k, pal::kLabel);
-		frame.text(x + 12, y, v, col);
+		frame.text(x + 12, y, ellipsize(v, w - 12), col);
 	}
 
 	void draw_pool_panel(int x, int y, int w, int h)
 	{
+		clamp_pools();
 		const bool foc_pools = (screen == Screen::Dashboard) && focus == F_POOLS;
 		const bool foc_mine = (screen == Screen::Dashboard) && focus == F_MINE;
 		const bool foc = foc_pools || foc_mine;
 		window(frame, x, y, w, h, "Pool", foc, pal::kPurple);
 		const int c = x + 3;
+		const int cw = w - 5;                 // room from c to the border
 		const int btn = y + h - 3;
+		const int mine_row = y + h - 5;
 		int ty = y + 2;
-		auto room = [&](int need) { return ty + need <= btn - 3; };
+		// The mine control's focus ring occupies mine_row +/- 1, so the last
+		// row content may use is mine_row - 2. Writing to mine_row - 1 does not
+		// overflow the panel -- it gets quietly painted over by the ring, which
+		// is worse, because the row simply vanishes when the control is focused.
+		auto fits = [&](int need) { return ty + need - 1 <= mine_row - 2; };
 
-		if (!cfg.chosen || cfg.pools.empty()) {
-			if (room(1)) frame.text(c, ty++, "no pool selected", pal::kDim);
-			if (room(2)) { ++ty; frame.text(c, ty++, "choose one below", pal::kDim); }
-		} else {
-			const Pool &p = cfg.pools[(size_t)cfg.selected];
-			if (room(1))
-				frame.text(c, ty++, "● " + p.label, pal::kPurple, pal::kPanel, true);
-			if (room(1))
-				frame.text(c + 2, ty++, p.host + ":" + p.port, pal::kInk);
-			if (room(1))
-				frame.text(c + 2, ty++,
-				           cfg.id.complete() ? cfg.id.shortened() : "(no wallet set)",
-				           cfg.id.complete() ? pal::kLabel : pal::kRed);
+		// Blank separators are the first thing to go when the window is short:
+		// they are the only rows here carrying no information, and dropping
+		// them is what keeps the share counters on screen at 24 rows. Below
+		// that, the pool's *name* goes before its *state* -- a panel with room
+		// for one line has to spend it on whether anything is working.
+		const int budget = (mine_row - 2) - ty + 1;
+		const bool roomy = budget >= 10;
+		auto sep = [&]() { if (roomy) ++ty; };
+
+		if (budget >= 4) {
+			if (!cfg.chosen || cfg.pools.empty()) {
+				if (fits(1)) frame.text(c, ty++, "no pool selected", pal::kDim);
+				if (fits(2)) { ++ty; frame.text(c, ty++, "choose one below", pal::kDim); }
+			} else {
+				const Pool &p = cfg.pools[(size_t)cfg.selected];
+				if (fits(1))
+					frame.text(c, ty++, ellipsize("● " + p.label, cw), pal::kPurple,
+					           pal::kPanel, true);
+				if (fits(1))
+					frame.text(c + 2, ty++, ellipsize(p.host + ":" + p.port, cw - 2),
+					           pal::kInk);
+				if (fits(1))
+					frame.text(c + 2, ty++,
+					           cfg.id.complete() ? ellipsize(cfg.id.shortened(), cw - 2)
+					                             : "(no payout address)",
+					           cfg.id.complete() ? pal::kLabel : pal::kRed);
+			}
 		}
 
-		const stratum::State st = client.state();
-		const bool live = st != stratum::State::Disconnected;
-		const bool on = st == stratum::State::Ready;
-		auto &sx = client.stats();
-		if (room(3)) {
-			++ty;
-			// "verified" is the useful word here: the pool answered, gave a
-			// target and gave work, so it is known good before mining starts.
-			// Anything else shows the client's own note -- "cannot resolve",
-			// "connection refused", "reconnecting in 4s" -- because a status
-			// that only says "not connected" leaves the user with nothing to
-			// act on.
-			const std::string note = client.status_text();
-			std::string sline;
-			if (!cfg.chosen)          sline = "no pool selected";
-			else if (mode == Mode::Mining) sline = "mining";
-			else if (on)              sline = "verified";
-			else if (!note.empty())   sline = note;
-			else                      sline = "connecting";
-			stat(c, ty++, "status", (on ? "● " : (live ? "◐ " : "○ ")) + sline,
-			     on ? pal::kGreen
-			        : (st == stratum::State::Failed ? pal::kRed : pal::kDim));
-			const double d = sx.difficulty.load();
-			stat(c, ty++, "difficulty", d > 0 ? std::to_string((long)d) : "—",
-			     d > 0 ? pal::kInk : pal::kDim);
+		const stratum::StatsView sx = client.stats();
+		sep();
+		if (fits(1)) {
+			// The pool's actual state, never the user's intention. See
+			// pool_status(): this line is the one that used to say "mining"
+			// for half an hour after the pool had gone.
+			const StatusLine s = pool_status();
+			stat(c, ty++, cw, "status", s.glyph + s.text, s.col);
+		}
+		if (fits(1)) {
+			// While a retry is in flight the live note reads "connecting", so
+			// the reason it is retrying has to persist somewhere. It takes the
+			// difficulty row, which reads "—" for exactly as long as there is
+			// something wrong.
+			const std::string why = client.last_error();
+			if (!pool_ready() && !why.empty())
+				// Full width, no key column: the actionable half of these
+				// messages is at the end, and it is the half that a 12-column
+				// indent would cut off.
+				frame.text(c, ty++, ellipsize("⚠ " + why, cw), pal::kRed);
+			else
+				stat(c, ty++, cw, "difficulty",
+				     sx.difficulty > 0 ? std::to_string((long)sx.difficulty) : "—",
+				     sx.difficulty > 0 ? pal::kInk : pal::kDim);
 		}
 
-		const int col2 = c + (w - 6) / 2;
-		if (room(3)) {
-			++ty;
-			stat(c, ty, "accepted", std::to_string(sx.accepted.load()),
-			     sx.accepted.load() ? pal::kGreen : pal::kDim);
-			stat(col2, ty++, "stale", std::to_string(sx.stale.load()),
-			     sx.stale.load() ? pal::kYellow : pal::kDim);
-			stat(c, ty, "rejected", std::to_string(sx.rejected.load()),
-			     sx.rejected.load() ? pal::kRed : pal::kDim);
-			const double ls = sx.last_share_time.load();
-			char age[32] = "—";
-			if (ls > 0)
-				snprintf(age, sizeof(age), "%.0fs ago", now_wall() - ls);
-			stat(col2, ty++, "last", age, ls > 0 ? pal::kInk : pal::kDim);
+		// Whether shares are landing is the single most important thing this
+		// panel reports, so it degrades to one line rather than disappearing.
+		char age[32] = "—";
+		if (sx.last_share_time > 0)
+			snprintf(age, sizeof(age), "%.0fs ago", now_wall() - sx.last_share_time);
+		const Rgb acc_col = sx.accepted ? pal::kGreen : pal::kDim;
+		const Rgb bad_col = sx.rejected ? pal::kRed : (sx.stale ? pal::kYellow : pal::kDim);
+		sep();
+		if (fits(3)) {
+			char line[96];
+			snprintf(line, sizeof(line), "%llu accepted", (unsigned long long)sx.accepted);
+			stat(c, ty++, cw, "shares", line, acc_col);
+			snprintf(line, sizeof(line), "%llu stale · %llu rejected",
+			         (unsigned long long)sx.stale, (unsigned long long)sx.rejected);
+			stat(c, ty++, cw, "", line, bad_col);
+			stat(c, ty++, cw, "last share", age,
+			     sx.last_share_time > 0 ? pal::kInk : pal::kDim);
+		} else if (fits(2)) {
+			char line[96];
+			snprintf(line, sizeof(line), "%llu accepted · %llu stale · %llu rej",
+			         (unsigned long long)sx.accepted, (unsigned long long)sx.stale,
+			         (unsigned long long)sx.rejected);
+			stat(c, ty++, cw, "shares", line, acc_col);
+			stat(c, ty++, cw, "last share", age,
+			     sx.last_share_time > 0 ? pal::kInk : pal::kDim);
+		} else if (fits(1)) {
+			char line[96];
+			snprintf(line, sizeof(line), "%llu ok · %llu stale · %llu rej",
+			         (unsigned long long)sx.accepted, (unsigned long long)sx.stale,
+			         (unsigned long long)sx.rejected);
+			stat(c, ty++, cw, "shares", line, acc_col);
 		}
 
 		const int bx = x + 2, bw = w - 4;
 		const int ix = bx + 3;
-		const int mine_row = btn - 2;
-		const bool verified = st == stratum::State::Ready;
-		draw_run_label(ix, mine_row, verified, mode == Mode::Mining, foc_mine);
+		const bool verified = pool_ready();
+		draw_run_label(ix, mine_row, bw - 6, verified, mode == Mode::Mining, foc_mine);
 		if (foc_mine)
 			focus_box(bx, mine_row, bw,
-			          mode == Mode::Mining || verified ? pal::kGreen : pal::kDim);
+			          mode == Mode::Mining && !verified ? pal::kRed
+			          : (mode == Mode::Mining || verified) ? pal::kGreen
+			                                               : pal::kDim);
 		draw_button(ix, btn, bw - 6, cfg.chosen ? "Change pool…" : "Select pool…",
 		            foc_pools, pal::kPurple);
 		if (foc_pools)
@@ -1065,54 +1294,99 @@ struct App {
 		y += hh;
 		// Side by side, so both panels take the taller requirement: cores need
 		// pad + rows + pad + spinners + button + pad; the pool panel needs
-		// identity, status, the share grid and its note.
+		// identity, status, the share block and its controls.
+		//
+		// pool_need was 15 against a panel that needs 18, so the share block
+		// never fitted -- and because `bot` is only ever clamped downwards, a
+		// bigger terminal did not help. On a ten-core machine the counters were
+		// unreachable at every size.
 		const int cores_need = (sys.ncpu + 1) / 2 + 10;
-		const int pool_need = 15;
+		const int pool_need = 18;
 		int bot = cores_need > pool_need ? cores_need : pool_need;
 		// Reserve a readable graph rather than splitting the remainder evenly:
 		// the bottom panels have a fixed content budget, the graph just wants
-		// whatever is left.
-		const int bot_max = (H - y) - 9;
+		// whatever is left. The floor is where both panels' controls are still
+		// on screen -- below that they were drawn past the bottom of the
+		// terminal and the user was pressing Enter on things they could not see.
+		const int bot_min = 9;
+		const int bot_max = (H - y) - 6;
 		if (bot > bot_max) bot = bot_max;
-		if (bot < 10) bot = 10;
-		const int gh = H - y - bot - 1;
-		draw_graph(0, y, W, gh > 5 ? gh : 5);
-		y += (gh > 5 ? gh : 5);
+		if (bot < bot_min) bot = bot_min;
+		int gh = H - y - bot - 1;
+		if (gh < 5) gh = 5;
+		draw_graph(0, y, W, gh);
+		y += gh;
 		const int lw = W / 2;
 		draw_cores(0, y, lw, bot);
 		draw_pool_panel(lw, y, W - lw, bot);
-		help(" ↑↓ move   ←→ adjust   ⏎ select   q quit ");
+		help(" ↑↓ move   ←→ adjust   ⏎ select   i address   q quit ");
 	}
 
 	// Pick a pool. That is the whole screen: the wallet is already known, so
 	// selecting costs one keystroke and nothing has to be retyped.
 	void draw_pools()
 	{
+		clamp_pools();
 		const int W = frame.width(), H = frame.height();
 		window(frame, 0, 0, W, H - 1, "Pools", true, pal::kPurple);
 
 		int ty = 2;
 		frame.text(4, ty++, "mining as", pal::kLabel);
-		frame.text(15, ty - 1, cfg.id.complete() ? cfg.id.user() : "(not set — press i)",
+		frame.text(15, ty - 1,
+		           ellipsize(cfg.id.complete() ? cfg.id.user() : "(not set — press i)",
+		                     W - 19),
 		           cfg.id.complete() ? pal::kInk : pal::kRed, pal::kPanel, true);
 		++ty;
 
-		for (size_t i = 0; i < cfg.pools.size(); ++i) {
-			const bool cur = (int)i == pool_cursor;
-			const bool sel = (int)i == cfg.selected;
+		// Rows are two apart because each carries a focus ring. Without a
+		// window they ran off the bottom: over the hint, over the border and
+		// then off screen entirely, with the cursor still live on a row nobody
+		// could see.
+		const int first = ty;
+		const int last = H - 5;
+		int visible = (last - first) / 2 + 1;
+		if (visible < 1) visible = 1;
+		const int n = (int)cfg.pools.size();
+		if (pool_cursor < pool_scroll)
+			pool_scroll = pool_cursor;
+		if (pool_cursor >= pool_scroll + visible)
+			pool_scroll = pool_cursor - visible + 1;
+		if (pool_scroll > n - visible)
+			pool_scroll = n - visible;
+		if (pool_scroll < 0)
+			pool_scroll = 0;
+
+		const int hostcol = W > 56 ? 30 : 8 + (W - 16) / 2;
+		for (int i = pool_scroll; i < n && i < pool_scroll + visible; ++i) {
+			const bool cur = i == pool_cursor;
+			const bool sel = i == cfg.selected && cfg.chosen;
 			if (cur) {
 				frame.text(2, ty, "▸", pal::kYellow);
 				focus_box(3, ty, W - 6, pal::kYellow);
 			}
 			frame.text(6, ty, sel ? "●" : "○", sel ? pal::kPurple : pal::kDim);
-			frame.text(8, ty, cfg.pools[i].label, cur ? pal::kInk : pal::kLabel,
-			           pal::kPanel, cur);
-			frame.text(30, ty, cfg.pools[i].host + ":" + cfg.pools[i].port,
+			frame.text(8, ty, ellipsize(cfg.pools[(size_t)i].label, hostcol - 9),
+			           cur ? pal::kInk : pal::kLabel, pal::kPanel, cur);
+			frame.text(hostcol, ty,
+			           ellipsize(cfg.pools[(size_t)i].host + ":" +
+			                         cfg.pools[(size_t)i].port,
+			                     W - hostcol - 4),
 			           cur ? pal::kPurple : pal::kDim);
 			ty += 2;
 		}
+		if (pool_scroll > 0)
+			frame.text(W - 6, first, "↑", pal::kYellow);
+		if (pool_scroll + visible < n)
+			frame.text(W - 6, first + (visible - 1) * 2, "↓", pal::kYellow);
+		if (n > visible) {
+			char pos[32];
+			snprintf(pos, sizeof(pos), "%d of %d", pool_cursor + 1, n);
+			frame.text(W - 6 - (int)strlen(pos), H - 4, pos, pal::kDim);
+		}
 
-		frame.text(4, H - 4, "the endpoint is editable — press e if a pool has moved",
+		frame.text(4, H - 4,
+		           ellipsize("the endpoint is editable — press e if a pool has moved",
+		                     W - 20),
 		           pal::kDim);
 		help(" ↑↓ move   ⏎ select   e edit   n new   d delete   i identity   esc back ");
 	}
@@ -1120,7 +1394,8 @@ struct App {
 	void draw_edit()
 	{
 		const int W = frame.width(), H = frame.height();
-		window(frame, 0, 0, W, H - 1, "Edit pool", true, pal::kPurple);
+		window(frame, 0, 0, W, H - 1, editing_new ? "New pool" : "Edit pool", true,
+		       pal::kPurple);
 		const char *names[3] = {"name", "host", "port"};
 		std::string *vals[3] = {&draft.label, &draft.host, &draft.port};
 		int ty = 3;
@@ -1130,10 +1405,15 @@ struct App {
 				focus_box(3, ty, W - 6, pal::kYellow);
 			frame.text(6, ty, names[i], foc ? pal::kInk : pal::kLabel, pal::kPanel, foc);
 			const std::string v = *vals[i] + (foc ? "▌" : "");
-			frame.text(20, ty, v.empty() ? "—" : v, foc ? pal::kYellow : pal::kInk);
+			frame.text(20, ty, ellipsize(v.empty() ? "—" : v, W - 24),
+			           foc ? pal::kYellow : pal::kInk);
 			ty += 2;
 		}
-		frame.text(6, H - 4, "the wallet is set once under identity, not per pool",
+		if (!form_err.empty())
+			frame.text(6, ty + 1, ellipsize(form_err, W - 10), pal::kRed);
+		frame.text(6, H - 4,
+		           ellipsize("the payout address is set once under identity, not per pool",
+		                     W - 10),
 		           pal::kDim);
 		help(" ↑↓ field   type to edit   ⏎ save   esc cancel ");
 	}
@@ -1166,26 +1446,42 @@ struct App {
 				focus_box(5, ty, W - 10, pal::kGreen);
 			frame.text(8, ty, names[i], foc ? pal::kInk : pal::kLabel, pal::kPanel, foc);
 			const std::string v = *vals[i] + (foc ? "▌" : "");
-			frame.text(26, ty, v.empty() ? "—" : v, foc ? pal::kYellow : pal::kInk);
+			frame.text(26, ty, ellipsize(v.empty() ? "—" : v, W - 30),
+			           foc ? pal::kYellow : pal::kInk);
 			// Below the ring, not on it: the ring occupies ty +/- 1.
-			frame.text(8, ty + 2, hints[i], pal::kDim);
+			// For the address the hint doubles as live validation, so a typo
+			// is caught here rather than as an authorize rejection minutes later.
+			const char *bad = (i == 0) ? id_draft.shape() : nullptr;
+			frame.text(8, ty + 2, ellipsize(bad ? bad : hints[i], W - 12),
+			           bad ? pal::kRed : pal::kDim);
 			ty += 4;
 		}
+		if (!form_err.empty())
+			frame.text(6, ty, ellipsize(form_err, W - 10), pal::kRed);
 		frame.text(6, H - 4,
-		           "stored in ~/.config/vh22/config — no wallet, no private key, just "
-		           "the payout address",
+		           ellipsize("stored in ~/.config/vh22/config — no wallet, no private key, "
+		                     "just the payout address",
+		                     W - 10),
 		           pal::kDim);
-		help(" ↑↓ field   type to enter   ⏎ save   esc skip for now ");
+		help(cfg.id.complete() ? " ↑↓ field   type to enter   ⏎ save   esc cancel "
+		                       : " ↑↓ field   type to enter   ⏎ save ");
 	}
 
 	void help(const std::string &s)
 	{
-		const int H = frame.height();
-		frame.hline(0, H - 1, frame.width(), " ", pal::kLabel, pal::kBar);
-		frame.text(1, H - 1, s, pal::kLabel, pal::kBar);
-		if (!status.empty())
-			frame.text(frame.width() - (int)status.size() - 2, H - 1, status,
-			           pal::kGreen, pal::kBar);
+		const int H = frame.height(), W = frame.width();
+		frame.hline(0, H - 1, W, " ", pal::kLabel, pal::kBar);
+		// The status wins the space it needs; the key hints are the thing that
+		// can be shortened, since they are the same every frame.
+		std::string msg;
+		if (!status.empty() && now_s() < status_until)
+			msg = ellipsize(status, W - 4);
+		else
+			status.clear();
+		const int msg_w = msg.empty() ? 0 : disp_len(msg) + 2;
+		frame.text(1, H - 1, ellipsize(s, W - msg_w - 2), pal::kLabel, pal::kBar);
+		if (!msg.empty())
+			frame.text(W - disp_len(msg) - 2, H - 1, msg, status_col, pal::kBar);
 	}
 
 	// --- input -----------------------------------------------------------
@@ -1234,18 +1530,60 @@ struct App {
 			case Key::Up: field = (field + 1) % 2; break;
 			case Key::Down:
 			case Key::Tab: field = (field + 1) % 2; break;
-			case Key::Enter:
+			case Key::Enter: {
+				// Saving nothing and returning to a dashboard that then says
+				// "connecting" for ever is not a save. Stay here and say why.
+				if (!id_draft.complete()) {
+					form_err = "a payout address is required — this is where "
+					           "the pool sends your rewards";
+					break;
+				}
+				if (const char *bad = id_draft.shape()) {
+					form_err = std::string("that does not look like a payout "
+					                       "address: ") + bad;
+					break;
+				}
+				const bool changed = cfg.id.address != id_draft.address ||
+				                     cfg.id.rig != id_draft.rig;
 				cfg.id = id_draft;
+				form_err.clear();
+				if (pending_pool >= 0 && pending_pool < (int)cfg.pools.size()) {
+					cfg.selected = pending_pool;
+					cfg.chosen = true;
+				}
+				pending_pool = -1;
+				clamp_pools();
 				save_settings(cfg);
 				screen = Screen::Dashboard;
-				status = cfg.id.complete() ? "saved" : "";
+				note("saved");
+				// The user string is fixed at authorize time, so an address
+				// change that does not reconnect keeps paying the old one
+				// while the panel shows the new one.
+				if (changed && cfg.chosen) {
+					stop_mining();
+					connect_selected();
+				}
 				break;
-			case Key::Escape: screen = Screen::Dashboard; break;
+			}
+			case Key::Escape:
+				// Leaving without an address is allowed, but it must not leave
+				// a pool marked chosen with nothing behind it.
+				form_err.clear();
+				pending_pool = -1;
+				if (!cfg.id.complete()) {
+					cfg.chosen = false;
+					client.stop();
+					note("no payout address set — nothing will be mined", true);
+				}
+				screen = Screen::Dashboard;
+				break;
 			case Key::Backspace:
+				form_err.clear();
 				if (!v[field]->empty())
 					v[field]->pop_back();
 				break;
 			case Key::Char:
+				form_err.clear();
 				if (e.ch >= 32 && e.ch < 127 && v[field]->size() < 64)
 					v[field]->push_back(e.ch);
 				break;
@@ -1261,22 +1599,57 @@ struct App {
 			case Key::Up: field = (field + 2) % 3; break;
 			case Key::Down:
 			case Key::Tab: field = (field + 1) % 3; break;
-			case Key::Enter:
+			case Key::Enter: {
+				if (draft.host.empty()) {
+					form_err = "a host is required, e.g. na.luckpool.net";
+					break;
+				}
+				const long port = strtol(draft.port.c_str(), nullptr, 10);
+				if (draft.port.empty() || port < 1 || port > 65535 ||
+				    draft.port.find_first_not_of("0123456789") != std::string::npos) {
+					form_err = "the port must be a number from 1 to 65535";
+					break;
+				}
+				if (draft.label.empty())
+					draft.label = draft.host;
 				draft.builtin = false;   // the user's value wins from here
-				if (pool_cursor >= (int)cfg.pools.size())
+				const bool live = cfg.chosen && !editing_new &&
+				                  cfg.selected == pool_cursor;
+				if (editing_new) {
 					cfg.pools.push_back(draft);
-				else
+					pool_cursor = (int)cfg.pools.size() - 1;
+				} else if (pool_cursor < (int)cfg.pools.size()) {
 					cfg.pools[(size_t)pool_cursor] = draft;
+				}
+				editing_new = false;
+				form_err.clear();
+				clamp_pools();
 				save_settings(cfg);
-				status = "saved";
+				note("saved");
+				screen = Screen::Pools;
+				// An endpoint edited underneath a live connection has to be
+				// retested, or the panel describes one pool and the socket
+				// another.
+				if (live) {
+					stop_mining();
+					connect_selected();
+				}
+				break;
+			}
+			case Key::Escape:
+				// The cursor was never moved past the end, so there is nothing
+				// to repair here -- which is the point.
+				editing_new = false;
+				form_err.clear();
 				screen = Screen::Pools;
 				break;
-			case Key::Escape: screen = Screen::Pools; break;
 			case Key::Backspace:
+				form_err.clear();
 				if (!v[field]->empty())
 					v[field]->pop_back();
 				break;
 			case Key::Char:
+				form_err.clear();
 				if (e.ch >= 32 && e.ch < 127 && v[field]->size() < 64)
 					v[field]->push_back(e.ch);
 				break;
@@ -1297,51 +1670,74 @@ struct App {
 				// it tests the pool rather than leaving that to a second
 				// button. By the time you are back on the dashboard the
 				// status says whether the endpoint is any good.
-				if (!cfg.pools.empty()) {
+				if (pool_cursor >= 0 && pool_cursor < (int)cfg.pools.size()) {
+					// The address check comes first: marking a pool chosen and
+					// then bouncing to setup is what left the dashboard saying
+					// "connecting" with nothing behind it if setup was skipped.
+					if (!cfg.id.complete()) {
+						pending_pool = pool_cursor;
+						id_draft = cfg.id;
+						field = 0;
+						form_err = "set your payout address first — the pool "
+						           "needs somewhere to send rewards";
+						screen = Screen::Setup;
+						break;
+					}
+					stop_mining();
 					cfg.selected = pool_cursor;
 					cfg.chosen = true;
 					save_settings(cfg);
-					if (mode == Mode::Mining) {
-						engine.stop();
-						engine.set_pool(nullptr);
-						mode = Mode::Idle;
-					}
-					if (!cfg.id.complete()) {
-						id_draft = cfg.id;
-						field = 0;
-						screen = Screen::Setup;
-						status = "set your address first";
-						break;
-					}
 					connect_selected();
-					status = "connecting";
 					focus = F_MINE;   // the reason you came here
 					screen = Screen::Dashboard;
 				}
 				break;
 			case Key::Escape: screen = Screen::Dashboard; break;
 			case Key::Char:
-				if (e.ch == 'e' && !cfg.pools.empty()) {
+				if (e.ch == 'e' && pool_cursor >= 0 &&
+				    pool_cursor < (int)cfg.pools.size()) {
 					draft = cfg.pools[(size_t)pool_cursor];
+					editing_new = false;
 					field = 0;
+					form_err.clear();
 					screen = Screen::EditPool;
 				} else if (e.ch == 'n') {
 					draft = Pool();
-					pool_cursor = (int)cfg.pools.size();
+					// The cursor stays on a row that exists. Parking it at
+					// size() to mean "new" is what let Escape leave it out of
+					// range for the next keystroke to read off the end.
+					editing_new = true;
 					field = 0;
+					form_err.clear();
 					screen = Screen::EditPool;
 				} else if (e.ch == 'i') {
 					id_draft = cfg.id;
 					field = 0;
+					form_err.clear();
 					screen = Screen::Setup;
-				} else if (e.ch == 'd' && cfg.pools.size() > 1) {
+				} else if (e.ch == 'd') {
+					if (cfg.pools.size() <= 1) {
+						note("the last pool cannot be deleted — edit it instead",
+						     true);
+						break;
+					}
+					// Deleting the row a live connection belongs to used to
+					// leave the label pointing at a different pool while the
+					// socket stayed where it was.
+					const bool was_live = cfg.chosen && cfg.selected == pool_cursor;
 					cfg.pools.erase(cfg.pools.begin() + pool_cursor);
-					if (pool_cursor >= (int)cfg.pools.size() && pool_cursor)
-						--pool_cursor;
-					if (cfg.selected >= (int)cfg.pools.size())
-						cfg.selected = 0;
+					if (was_live) {
+						stop_mining();
+						client.stop();
+						cfg.chosen = false;
+						note("deleted — that was the selected pool", true);
+					} else {
+						if (cfg.selected > pool_cursor)
+							--cfg.selected;   // the live row moved up one
+						note("deleted");
+					}
+					clamp_pools();
 					save_settings(cfg);
-					status = "deleted";
 				} else if (e.ch == 'q') {
 					return false;
 				}
@@ -1361,12 +1757,12 @@ struct App {
 		case Key::Enter:
 			if (focus == F_MINE) {
 				if (mode == Mode::Mining) {
-					engine.stop();
-					engine.set_pool(nullptr);
-					mode = Mode::Idle;
-					status = "stopped";
-				} else if (client.state() != stratum::State::Ready) {
-					status = "pool not verified yet";
+					stop_mining();
+					note("stopped");
+				} else if (!pool_ready()) {
+					// Say which of the several reasons it is, not just "no".
+					const StatusLine s = pool_status();
+					note(s.text, true);
 				} else {
 					peak = 0; avg_acc = 0; avg_n = 0;
 					engine.set_pool(&client);
@@ -1374,27 +1770,37 @@ struct App {
 					kin.begin(now_s());
 					mode = Mode::Mining;
 					dust.begin(now_s());
-					status = "mining";
+					note("mining");
 				}
 			} else if (focus == F_BENCH) {
 				if (mode == Mode::Benchmark) {
 					engine.stop();
 					mode = Mode::Idle;
-					status = "stopped";
+					note("stopped");
 				} else {
 					peak = 0; avg_acc = 0; avg_n = 0;
+					stop_mining();
 					engine.set_pool(nullptr);
 					engine.start(threads, lanes);
 					mode = Mode::Benchmark;
-					status = "benchmarking";
+					note("benchmarking");
 				}
 			} else if (focus == F_POOLS) {
 				pool_cursor = cfg.selected;
+				clamp_pools();
 				screen = Screen::Pools;
 			}
 			break;
 		case Key::Char:
 			if (e.ch == 'q') return false;
+			// The dashboard offered no route to the address it needs; the only
+			// way in was through a screen the user had no reason to open.
+			if (e.ch == 'i') {
+				id_draft = cfg.id;
+				field = 0;
+				form_err.clear();
+				screen = Screen::Setup;
+			}
 			break;
 		case Key::Quit: return false;
 		default: break;
@@ -1427,8 +1833,17 @@ struct App {
 			term.measure();
 			frame.resize(term.width(), term.height());
 			frame.clear();
-			if (term.width() < 60 || term.height() < 16) {
-				frame.text(1, 1, "terminal too small — 60x16 minimum", pal::kRed);
+			// The old floor of 60x16 was below what the dashboard can actually
+			// draw: at 16 rows both panels' controls landed off the bottom of
+			// the screen while focus still moved onto them.
+			if (term.width() < kMinW || term.height() < kMinH) {
+				char b[96];
+				snprintf(b, sizeof(b), "terminal too small — need %dx%d, this is %dx%d",
+				         kMinW, kMinH, term.width(), term.height());
+				frame.text(1, 1, ellipsize(b, term.width() - 2), pal::kRed);
+				if (term.height() > 3)
+					frame.text(1, 3, ellipsize("resize the window, or press q",
+					                           term.width() - 2), pal::kDim);
 			} else if (screen == Screen::Dashboard) {
 				draw_dashboard();
 			} else if (screen == Screen::Pools) {
