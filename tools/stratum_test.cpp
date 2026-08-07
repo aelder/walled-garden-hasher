@@ -147,10 +147,9 @@ int main(int argc, char **argv)
 		check(hash_meets_target((const uint32_t *)pool_hash, job.target),
 		      "the re-derived hash meets the target");
 
-		// A test that cannot fail proves nothing, and this one guards a bug
-		// that every structural check passed. Send the solution as the pool
-		// issued it -- the old behaviour -- and the re-derivation must land
-		// somewhere else entirely.
+		// Negative coverage for the previous unspliced-solution bug, which
+		// passed every structural check. Send the solution as the pool issued
+		// it; the re-derived digest must differ from the mined digest.
 		stratum::Job asSent = asPool;
 		memcpy(asSent.solution, job.solution, sizeof(submitted));
 		uint8_t unspliced_pre[stratum::kFullBytes];

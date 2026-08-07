@@ -21,6 +21,16 @@ finds none of them falls back to the first headline below, compiled in.
 
 ## live
 
+- Walled Garden Hasher brings native Verus mining to Apple silicon — one binary, no runtime dependencies, all cores accounted for.
+
+- Local Mac discovers every core has been invited to the hash party — efficiency cores arrive early and stay late.
+
+- Terminal requests a little more room to breathe — 60 columns by 19 rows keeps every gauge inside the garden wall.
+
+- Pool connection enters witness protection after going quiet — the dashboard still remembers the last useful error.
+
+- Mining dashboard learns to slow its painting while the engine works — the keyboard remains considerably less patient.
+
 - Walled Garden Hasher released, bringing Verus mining to Apple Silicon — at least one person reportedly extremely excited.
 
 - Tim Cook rumored to be seriously considering changing name to Tim Apple. Says it just, "feels magical, and more Tim than ever."
@@ -30,5 +40,3 @@ finds none of them falls back to the first headline below, compiled in.
 - Apple Reportedly Testing New Mouse Designed to Be Used Entirely Upside Down. Leaker Says Charging Port Has Also Been Moved to the Top.
 
 - President of United States Floats Idea of Strategic RAM Reserve. Aide Says President Was Concerned He Wouldn’t Be Able to Play The Sims With All 97 Expansion Packs Installed.
-
-

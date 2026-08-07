@@ -1,17 +1,15 @@
 # Third-party sources
 
-Only `make crosscheck` uses any of this. The miner itself — everything under
-`src/`, `include/`, `net/`, `ui/` and `ref/` — is written from the VerusHash
-2.2 specification and links none of it.
+`make crosscheck` compiles the sources in this directory. The shipping miner —
+everything under `src/`, `include/`, `net/`, `ui/`, and `ref/` — does not link
+them.
 
-It is here because the cross-check is not optional. A reference transcribed
-from the same misreading as the implementation agrees with it perfectly: that
-is exactly how `clhash` case 4 passed 70,255 differential checks against this
-project's own from-spec reference while reading the wrong Haraka round
-constants. Only a diff against a *separately written* implementation caught it.
-Vendoring these four files is the price of keeping that gate.
+The cross-check compares the native engine with a separately written deployed
+implementation. It detected a case-4 Haraka round-constant difference that
+passed 70,255 differential checks against the local reference. The required
+upstream sources are pinned here to keep that comparison reproducible.
 
-| Path | Origin | Licence |
+| Path | Origin | License |
 |---|---|---|
 | `verus/verus_clhash.{cpp,h}` | Verus Coin, © 2018 Michael Toutonghi | Apache-2.0 |
 | `verus/haraka.{c,h}` | © 2016 kste | MIT |
@@ -20,10 +18,8 @@ Vendoring these four files is the price of keeping that gate.
 Unmodified. Their own notices are in the file headers and, for sse2neon, in its
 `LICENSE`.
 
-Both Apache-2.0 and MIT are compatible with this project's GPL-3.0-or-later —
-Apache-2.0 notably is *not* compatible with GPL-2.0, which is part of why v3
-was chosen.
+Both Apache-2.0 and MIT are compatible with GPL-3.0-or-later. Apache-2.0 is not
+compatible with GPL-2.0.
 
-The sse2neon submodule is required only for the cross-check. `make` and
-`make test` do not need it, and the Makefile says so rather than failing on a
-missing header three levels down.
+The `sse2neon` submodule is required for `make crosscheck`. It is not required
+for `make` or `make test`.

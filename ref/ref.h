@@ -3,8 +3,8 @@
 // No intrinsics, no NEON, no assumptions about the host. Every primitive is
 // spelled out from its definition: AES rounds from S-box/ShiftRows/MixColumns,
 // carry-less multiply bit by bit, mulhrs as exact integer arithmetic. It is
-// slow on purpose; its only job is to be obviously correct so the optimised
-// engine can be diffed against it.
+// slow by design and kept structurally independent so the optimised engine can
+// be diffed against it.
 #pragma once
 
 #include <stddef.h>
