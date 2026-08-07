@@ -1019,16 +1019,12 @@ struct App {
 	// which is all we want from it while the machine is busy.
 	double frames(double n) const { return n * redraw_period(); }
 
-	// When the logo's gloss sweep started, or negative for still. It runs while
-	// work is actually being done rather than merely while the user has asked
-	// for it, so it goes dead the moment the pool does -- the same rule the
-	// status line and the run label follow.
+	// When the logo's gloss sweep started, or negative for still. The sweep runs
+	// while the engine has current pool work and stops when the pool stalls.
 	double gloss_t0 = -1;
 
-	// The single source of truth for "what is going on with the pool". The bug
-	// this replaces was a status line that reported the user's *intent*
-	// (mode == Mining) as though it were the pool's state, so a pool that had
-	// been dead for half an hour still rendered as a healthy green "mining".
+	// Central formatting path for the current pool state. Status derives from
+	// current work rather than the requested mining mode.
 	struct StatusLine {
 		const char *glyph;
 		std::string text;
@@ -1154,12 +1150,10 @@ struct App {
 			last_hashes = h;
 			last_t = t;
 			if (engine.active()) {
-				// Frozen holds every graph on its last frame. Hashrate and the
-				// share counts are numbers rather than motion, so they carry
-				// on -- which is the whole point of a setting this slow.
+				// Frozen holds graphs on their last frame while hashrate and share
+				// counts continue to update.
 				if (!frozen()) {
-					// The plot always tells the truth, including the drop to
-					// zero when the pool goes away -- that dip is the signal.
+					// Record current hashrate, including zero when pool work stops.
 					hist.erase(hist.begin());
 					hist.push_back(rate);
 				}

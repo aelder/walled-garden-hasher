@@ -1,82 +1,116 @@
-# vh22-top
+# Install `vh22-top`
 
-A VerusHash 2.2 miner for Apple silicon. CPU only, no dependencies, one binary.
+`vh22-top` requires an Apple silicon Mac and an interactive terminal at least
+60 columns by 19 rows. Truecolor is recommended.
 
-Requires an Apple silicon Mac and a terminal at least 60x19. Truecolor helps —
-the palette is the 1977 Apple logo sampled from the logo itself, and it does
-not degrade gracefully to ANSI 16.
+## Install a release build
 
-## Verify what you downloaded, then unquarantine it
+Download these two files for the same version from
+[GitHub Releases](https://github.com/aelder/walled-garden-hasher/releases):
 
-The binary is **not signed or notarized**. macOS quarantines anything arriving
-from a browser, so Gatekeeper will refuse to run it: *"cannot be opened because
-the developer cannot be verified"*.
+- `walled-garden-hasher-vX.Y.Z-macos-arm64.tar.gz`
+- `walled-garden-hasher-vX.Y.Z-macos-arm64.tar.gz.sha256`
 
-Check the download against its published checksum first. Stripping quarantine
-is telling macOS you vouch for this file, so it is worth being sure it is the
-file that was built:
+The binary is currently **unsigned and not notarized**. The steps below compare
+the archive with its published checksum before removing the quarantine marker
+that macOS adds to browser downloads.
+
+The example below uses `v1.0.0`; replace it with the version you downloaded.
 
 ```bash
-shasum -a 256 -c vh22-top-*.tar.gz.sha256
+RELEASE=v1.0.0
+ARCHIVE="walled-garden-hasher-${RELEASE}-macos-arm64.tar.gz"
+
+shasum -a 256 -c "${ARCHIVE}.sha256"
+tar xzf "${ARCHIVE}"
+cd "${ARCHIVE%.tar.gz}"
 ```
 
-That must print `OK`. If it does not, stop — do not run the binary.
+`OK` confirms that the archive matches the published checksum. Any other result
+indicates a mismatch.
 
-Then unpack and clear the quarantine flag:
+After a successful checksum:
 
 ```bash
-tar xzf vh22-top-*-macos-arm64.tar.gz
-cd vh22-top-*-macos-arm64
 xattr -d com.apple.quarantine vh22-top
 ./vh22-top
 ```
 
-`xattr -d com.apple.quarantine` removes the marker macOS attaches to
-downloaded files. Do it only for files you have checksummed, and never as a
-blanket habit.
+`xattr -d com.apple.quarantine` removes the marker from the verified
+`vh22-top` binary. No broader Gatekeeper or quarantine changes are required.
 
-Prefer not to? Build from source instead — it is one command and no quarantine
-is involved:
+## Build from source
+
+Install the Xcode Command Line Tools if needed:
 
 ```bash
-cd vh22 && make top
+xcode-select --install
+```
+
+Then clone, build, and launch:
+
+```bash
+git clone https://github.com/aelder/walled-garden-hasher.git
+cd walled-garden-hasher
+make top
+```
+
+The default build does not require submodules. Contributors running the
+independent correctness cross-check should also run:
+
+```bash
+git submodule update --init third_party/verus/sse2neon
+make crosscheck
 ```
 
 ## First run
 
-It asks for two things once: the address rewards are paid to, and a name for
-this machine on the pool. Everything after that is a list.
+The miner asks for two identity values once:
 
-Pick a pool and it is tested immediately — by the time you are back on the
-dashboard the panel says whether the endpoint is any good, and names the
-address it actually resolved to. MINE only becomes available once the pool is
-verified *and* holding work, so the button is never offered for a session that
-could only produce zero.
+1. The Verus payout address that receives rewards.
+2. A rig name that identifies this Mac to the pool.
 
-If something is wrong the panel says what, and keeps saying it: the status row
-reports what the client is doing this second, and a separate `⚠` row holds the
-last actual failure, because a retry cycle spends most of its time saying
-"connecting".
+Next, choose a pool. The miner tests it immediately and enables mining only
+after the endpoint is verified and has supplied work. The status row shows the
+current connection phase, while the warning row retains the last actual error.
+
+No wallet, private key, or seed phrase is stored. Only the payout address, rig
+name, and pool settings are written to `~/.config/vh22/config` with mode `0600`.
 
 ## Keys
 
-| Key | Does |
+| Key | Action |
 |---|---|
-| `↑` `↓` | move between controls |
-| `←` `→` | adjust threads and lanes |
-| `⏎` | select, or start and stop |
-| `?` | every control, explained, on one screen |
-| `+` `-` | refresh rate: 100ms, 300ms, freeze |
-| `i` | set the payout address |
-| `e` `n` `d` | edit, add, delete a pool (in the pool list) |
-| `q` | quit |
+| `↑` / `↓` | Move between controls |
+| `←` / `→` | Adjust threads and lanes |
+| `Enter` | Select, start, or stop |
+| `?` | Show the in-app key guide |
+| `+` / `-` | Select 100 ms, 300 ms, or frozen graph refresh |
+| `i` | Set the payout address |
+| `e` / `n` / `d` | Edit, add, or delete a pool in the pool list |
+| `q` | Quit |
 
-## Files
+## Files and overrides
 
-| Path | What |
+| Path or variable | Purpose |
 |---|---|
-| `~/.config/vh22/config` | identity and pools, mode 0600 — it names the wallet being mined to |
-| `~/.config/vh22/news.md` | ticker copy, if you want your own; `$VH22_NEWS` overrides |
-| `~/.config/vh22/film` | frames for the easter egg; `tools/make-film.sh` makes them, `$VH22_FILM` overrides |
+| `~/.config/vh22/config` | Identity and pools; mode `0600` |
+| `~/.config/vh22/news.md` | Optional ticker copy |
+| `VH22_NEWS` | Override the ticker file path |
+| `~/.config/vh22/film` | Optional animation frames |
+| `VH22_FILM` | Override the animation directory |
 
-No wallet and no private key are stored, only the payout address.
+Run `./vh22-top --help` for the built-in summary.
+
+## Troubleshooting
+
+- **macOS says the developer cannot be verified:** verify the SHA-256 checksum,
+  then remove quarantine from `vh22-top` as shown above.
+- **The program says it needs an interactive terminal:** run it directly from
+  Terminal, iTerm2, or another terminal emulator instead of redirecting input.
+- **The interface says the window is too small:** resize the terminal to at
+  least 60x19.
+- **Mining is unavailable:** select a pool and wait for both verification and
+  the first job. The status and warning rows explain connection failures.
+- **CPU use is high:** this is expected while mining. Reduce the thread count
+  in the interface or stop mining with `Enter`.

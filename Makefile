@@ -1,7 +1,8 @@
 # vh22 — native AArch64 VerusHash 2.2
 #
 # -mcpu (not -march): it selects the scheduling model as well as the feature
-# set. clang 21 has no apple-m5 model yet, so `native` is the honest default.
+# set. clang 21 has no apple-m5 model yet, so `native` uses the detected CPU's
+# scheduling model.
 
 CXX      ?= clang++
 MCPU     ?= native
@@ -102,4 +103,3 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
-

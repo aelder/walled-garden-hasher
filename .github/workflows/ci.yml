@@ -1,12 +1,8 @@
-# The four gates AGENTS.md requires, on every push.
-#
-# They are not redundant. `test` compares against a reference written from the
-# specification; `crosscheck` compares against the deployed sse2neon build. A
-# reference transcribed from the same misreading as the implementation agrees
-# with it perfectly, which is exactly how clhash case 4 passed 70,255 checks
-# while reading the wrong round constants -- only the cross-check caught it.
-# `audit-disas` catches codegen regressions, which are correctness-neutral and
-# so invisible to both. `stratum-test` covers the share path end to end.
+# Release gates run on every push:
+# - `test`: comparison with the specification reference
+# - `crosscheck`: comparison with the deployed sse2neon implementation
+# - `stratum-test`: end-to-end share construction and submission
+# - `audit-disas`: performance-sensitive instruction selection and scheduling
 name: gates
 
 on:
@@ -18,8 +14,7 @@ on:
 
 jobs:
   gates:
-    # Apple silicon. The engine is AArch64 crypto intrinsics built with
-    # -mcpu=native; there is nothing to learn from running it on x86.
+    # The AArch64 crypto intrinsics and -mcpu=native build require Apple silicon.
     runs-on: macos-15
     timeout-minutes: 25
 
@@ -27,8 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # crosscheck compiles ../verus, which includes sse2neon. Without the
-          # submodule that gate is skipped rather than failed, which is the
-          # quiet kind of green nobody notices.
+          # submodule the independent cross-check cannot compile.
           submodules: recursive
 
       - name: Toolchain
@@ -50,13 +44,11 @@ jobs:
         run: make stratum-test
 
       - name: Codegen audit
-        # AESE/AESMC pairing is what clang will silently ruin, and neither
-        # correctness gate can see it.
+        # Functional tests do not enforce AESE/AESMC instruction pairing.
         run: python3 tools/audit-disas.py build/src/*.o
 
       - name: Front end starts and exits without a terminal
-        # It cannot draw here -- there is no tty -- so this asserts the refusal
-        # is clean rather than a crash or a hang.
+        # Without a tty, the front end must exit with its documented diagnostic.
         run: |
           set +e
           ./build/vh22-top < /dev/null > out.txt 2>&1
@@ -66,8 +58,7 @@ jobs:
           test $rc -eq 1 || { echo "expected exit 1 without a tty, got $rc"; exit 1; }
           grep -q "interactive terminal" out.txt
 
-  # Only on a v* tag, and only behind the gates: a release that skipped them
-  # would be the one artifact where it mattered most that they ran.
+  # Package v* tags after the gates complete.
   release:
     needs: gates
     if: startsWith(github.ref, 'refs/tags/v')
@@ -101,6 +92,7 @@ jobs:
           cp build/vh22-top "dist/$name/"
           cp ui/news.md "dist/$name/"
           cp INSTALL.md "dist/$name/"
+          cp README.md CHANGELOG.md LICENSE "dist/$name/"
           cd dist
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"

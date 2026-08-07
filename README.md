@@ -1,371 +1,130 @@
 # The Walled Garden Hasher
 
-A VerusHash 2.2 miner for Apple silicon. CPU only, no dependencies, one binary.
+[![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
 
-The engine is a greenfield C++ implementation built directly on ARM crypto
-intrinsics rather than routing x86 intrinsics through `sse2neon`. On an M5
-MacBook Air it runs **4.97 MH/s** on one thread and **29.28 MH/s** sustained on
-ten, against 3.85 and 26.21 for the tuned `sse2neon` miner on the same machine
-and the same work — +29% per core, and +12% where the machine is power- and
-bandwidth-limited rather than engine-limited.
+A CPU-only VerusHash 2.2 miner built specifically for Apple silicon. It ships as
+one dependency-free binary with a native ARM engine, a Verus PBaaS stratum
+client, and the `vh22-top` terminal interface.
 
-On top of it: a dependency-free Verus PBaaS stratum client and `vh22-top`, a
-terminal front end.
+The hashing engine uses ARM crypto intrinsics directly instead of translating
+x86 intrinsics through `sse2neon`. On an M5 MacBook Air it measured 4.97 MH/s
+on one thread and 29.28 MH/s sustained on ten threads. See
+[`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the benchmark conditions,
+architecture, and correctness notes.
 
-The engine was written against *VerusHash 2.2 — Native Apple Silicon Port:
-Engineering Notes*. Section references below (§N) are to that document, and the
-places measurement contradicted it are recorded under
-[Where measurement disagreed with the notes](#where-measurement-disagreed-with-the-notes).
+> [!CAUTION]
+> Mining keeps the selected CPU cores busy, increasing heat and power draw.
+> Battery runtime will decrease during sustained mining.
 
+## Requirements
+
+- An Apple silicon Mac
+- A terminal at least 60 columns by 19 rows; truecolor is recommended
+- Xcode Command Line Tools when building from source
+
+There are no third-party runtime dependencies. Intel Macs are not supported.
+
+## Quick start
+
+### Download a release
+
+Download the macOS ARM64 archive and matching SHA-256 file from
+[GitHub Releases](https://github.com/aelder/walled-garden-hasher/releases), then
+follow the verification and installation steps in [`INSTALL.md`](INSTALL.md).
+Release binaries are currently unsigned and not notarized.
+
+### Build from source
+
+```bash
+git clone https://github.com/aelder/walled-garden-hasher.git
+cd walled-garden-hasher
+make top
 ```
-make top         # build and run the miner
-make test        # differential harness against ref/ (written from the spec)
-make crosscheck  # end-to-end diff against the deployed sse2neon implementation
-make bench       # throughput
-python3 tools/audit-disas.py build/src/*.o   # §10 codegen checks
-```
 
-`make`, `make test` and `make bench` are self-contained. `make crosscheck`
-compiles the vendored upstream sources in `third_party/`, which include
-sse2neon as a submodule, so a fresh clone needs it once:
+`make top` builds and launches `build/vh22-top`. The miner asks for a payout
+address, rig name, and pool on first run.
 
-```
-git submodule update --init third_party/verus/sse2neon
-```
+Only the payout address, rig name, and pool settings are stored. The application
+does not create or store a wallet, private key, or seed phrase.
 
-See [`INSTALL.md`](INSTALL.md) to run a release build instead of building from
-source, and [`third_party/README.md`](third_party/README.md) for what is
-vendored and why.
+## Interface
 
-## Licence
+`vh22-top` is a keyboard-driven terminal dashboard with live hashrate, share
+counts, per-core load, pool state, and bounded reconnect behavior. Mining is
+available only after the selected pool is verified and has supplied work.
 
-GPL-3.0-or-later. See [`LICENSE`](LICENSE).
-
-The engine, the stratum client and the front end are written from the
-VerusHash 2.2 specification and link nothing else. The four files under
-`third_party/verus/` are used only by `make crosscheck`, carry their own
-Apache-2.0 and MIT notices, and are unmodified.
-
-## vh22-top
-
-`make top` builds and runs the terminal front end.
-
-System 7 chrome -- pinstriped title bars, a close box on the focused window,
-square shoulders -- with the 1977 six-colour Apple logo as the data palette.
-The hashrate plot is btop-density braille (2x4 dots per cell) coloured by
-height in logo order, green at the top, so a healthy run paints the stripes.
-Arrow keys move focus and adjust values; the whole UI is keyboard-driven.
-
-Live per-core load comes from `host_processor_info`, the same source btop
-reads, with performance and efficiency cores labelled and coloured apart.
-Cores are never dimmed to imply a thread is bound to one: macOS has no
-thread-to-core pinning API, so workers land wherever the scheduler puts them
-and every meter shows real load. The panel says so.
-
-Identity and pools live in `~/.config/vh22/config` at mode 0600 -- it names the
-wallet being mined to, and nothing else. The payout address is asked for once,
-on first run, and composed with the rig name into the stratum user; switching
-pools then costs one keystroke instead of retyping it. Selecting a pool tests
-it there and then, so there is no separate Connect step and the dashboard is
-already reporting the truth by the time you are back on it.
-
-MINE is only offered once the pool is verified *and* holding work. Everything
-below turns on that distinction:
-
-- Nothing waits indefinitely. The connect, the handshake, the first job and
-  continued silence are all bounded (`kConnectTimeoutMs` and friends in
-  `net/stratum.h`), and stop() never blocks the UI thread even when a pool is
-  a black hole.
-- The status row says what the client is doing this second; a separate `⚠` row
-  keeps the last actual failure, because a retry cycle spends most of its time
-  saying "connecting" and the diagnosis would otherwise be on screen for about
-  a second in ten.
-- Intent is never reported as state. If the pool dies mid-run the label reads
-  STALLED and the readout `◌ stalled`, rather than an animated MINING over a
-  hashrate of zero.
-
-Accepted, stale and rejected counts are live in the panel, and the logo carries
-a diagonal gloss sweep while work is actually being done -- it goes still when
-the pool does.
-
-A one-row news ticker sits between the header and the plot, holding each
-screenful still long enough to read and sliding right to left between them. Its
-copy is `ui/news.md`, read at runtime.
-
-The refresh rate sits on the Cores title bar as `- 100ms +`, stepped with `+`
-and `-`. A repaint is a full screen of cells plus the escape stream to carry
-it, and while the engine holds every core at 100% that competes with the work
-the user started, so the rate follows the engine on its own -- 300 ms busy,
-100 ms idle -- until `+`/`-` takes it over.
-
-Only three rates are offered, because every one has to be a rate the UI looks
-right at. Animation durations are counted in frames rather than seconds, so
-100 and 300 ms are the same motion at different speeds; nothing slower can
-carry motion at all, which is why the bottom of the range is `freeze`, holding
-every graph on its last frame and updating only the hashrate and the share
-counts, every two seconds. Input is never affected: poll() keeps its own short
-timeout and a keystroke repaints immediately, so at any rate the keyboard
-answers in about a millisecond.
-
-There is an easter egg. The Konami code plays an ASCII animation in the
-hashrate window, scaled to fit and centred -- fitting rather than filling,
-because the plot is about five times wider than it is tall and a filled frame
-would lose its top and bottom.
-
-No frames ship with this repository and none will: the rendering this was
-modelled on carries no licence at all and its 30 MB includes the source video.
-The player is here, the payload is not, exactly as with the ticker copy.
-`tools/make-film.sh` cuts frames from any video you have the right to use, into
-`~/.config/vh22/film` or wherever `$VH22_FILM` points. Loaded on its own thread,
-so triggering it never blocks the UI, and with nothing to play it says so and
-names the directory it looked in.
-
-Minimum window is 60x19, which is where the dashboard is genuinely drawable;
-below that it says so and names the size you have. The Apple watermark in the
-plot needs about 38 rows, and the full-size one about 49.
-
-## Stratum
-
-`net/` is a Verus PBaaS stratum client with no dependencies -- including its
-own small JSON parser, since the protocol needs objects, arrays, strings and
-numbers nested three deep and that does not justify linking jansson.
-
-The wire format is transcribed from the deployed implementation, and one part
-of it is not guessable: for solution version 7 with a descriptor present, the
-canonical header fields are **not** part of the hashed preimage. Prevhash,
-merkle root, sapling root, nBits and the whole 32-byte nonce are zeroed, and
-the identifying data rides in the solution's nonce space instead. Get it wrong
-and the pool rejects every share without explaining why.
-
-Which means the share's **solution** is what has to carry the nonce, and this
-is the part that cost a release. The bytes the engine varies are the last
-fifteen of the solution -- eleven of nonce space then the counting nonce, at
-solution byte 1329, because VerusHashHalf's final partial block is preimage
-bytes 1472..1486 and 1487 - 15 - 143 is 1329. Submitting the solution as
-`mining.notify` delivered it asks the pool to hash a preimage that was never
-mined. Every field is well formed, every length is right, and every share is
-rejected. The only specification for this is `record_solution` in the deployed
-ccminer-based miner's `verusscan.cpp`, which splices those fifteen bytes at
-`work->extra + 1332` — three bytes of CompactSize past solution byte 1329.
-That file is not vendored here; it is not needed to build or to cross-check.
-
-The same values travel in the header too -- the counting nonce at word 30 and
-the per-worker tag at word 32 -- so the two agree if a pool cross-checks them,
-but it is the solution the hash is taken over.
-
-The client reconnects on its own: backoff doubles from one second to thirty
-and resets whenever a session actually reached Ready, so a stable pool that
-blips does not inherit a long delay. Nothing survives a reconnect -- the pool
-issues a new extranonce, so the previous job and target are not merely stale
-but wrong to mine, and shares sent but never answered are counted stale
-because their fate is unknowable. `client.reconnect` is honoured.
-
-`make stratum-test` runs the client against `tools/mock_pool.py`, a mock pool
-that **validates** what the miner sends rather than accepting it -- submit
-parameter count, nonce length against the extranonce it issued, the fd4005
-CompactSize prefix, hex validity. It also covers the accepted, stale and
-rejected paths so the share accounting is exercised, not just the happy one.
-
-Shape is not enough, though, and believing it was is how the unspliced solution
-shipped: every structural check above passes on a share that no pool will ever
-accept. So both ends now check meaning. The mock reconstructs the nonce field
-it would rebuild and requires the solution tail to agree with it. The test does
-what a pool does -- rebuilds the preimage from the job plus the submitted nonce
-and solution, hashes it, and checks it lands on the digest the miner solved and
-meets the target -- and then submits the unspliced solution and asserts the
-re-derivation lands somewhere else, because a test that cannot fail proves
-nothing.
-
-## Layout
-
-| Path | What |
+| Key | Action |
 |---|---|
-| `include/vh22/arch.h` | Every NEON primitive, one per instruction we actually want |
-| `include/vh22/haraka.h` | Fused Haraka256/512, keyed and truncated variants |
-| `include/vh22/clhash_bodies.h` | The eight CLHash step bodies |
-| `src/clhash_wave.cpp` | N-way interleaved, case-bucketed kernel |
-| `src/verushash.cpp` | Template setup, key expansion, per-nonce driver |
-| `ref/` | Intrinsic-free specification. Slow on purpose |
-| `ui/` | vh22-top: terminal layer, widgets, app |
-| `tools/` | Harnesses, benchmark, disassembly audit, A/B script |
+| `↑` / `↓` | Move between controls |
+| `←` / `→` | Adjust threads and lanes |
+| `Enter` | Select, start, or stop |
+| `?` | Show the in-app key guide |
+| `+` / `-` | Change refresh rate |
+| `i` | Set the payout address |
+| `e` / `n` / `d` | Edit, add, or delete a pool in the pool list |
+| `q` | Quit |
 
-## Results
+If a pool stops supplying work, the status changes from `MINING` to `STALLED`
+and the hashrate falls to zero.
 
-M5 (4P + 6E, 128 KB L1D), clang 21, `-O3 -mcpu=native`, against the tuned
-`sse2neon` production miner on the same machine and the same work:
+## Configuration
 
-| | production | vh22 | |
-|---|---|---|---|
-| 1 thread | 3.85 MH/s | **4.97 MH/s** | +29% |
-| 10 threads | 26.21 MH/s | **29.28 MH/s** | +12% |
+| Path or variable | Purpose |
+|---|---|
+| `~/.config/vh22/config` | Payout identity and pools; written with mode `0600` |
+| `~/.config/vh22/news.md` | Optional ticker copy |
+| `VH22_NEWS` | Override the ticker file path |
+| `~/.config/vh22/film` | Optional animation frames |
+| `VH22_FILM` | Override the animation directory |
 
-Full-machine convergence is expected: at 10 threads the machine is power- and
-bandwidth-limited, so per-core engine quality stops being the binding
-constraint.
+Run `build/vh22-top --help` for the command-line summary. Configuration is
+managed inside the interface rather than with command-line flags.
 
-### Peak
+## Development commands
 
-`vh22-bench --peak` reports the fastest sampled window rather than the run
-average. Best recorded, 8 s, 64 lanes, 10 threads, CPU only:
-
+```bash
+make                 # build the miner and development binaries
+make test            # differential checks against the from-spec reference
+make stratum-test    # exercise the share path against the mock pool
+make bench           # run the throughput benchmark
 ```
-PEAK      30.47 MH/s   (best 100 ms window)
-          30.33 MH/s   (best 500 ms)
-          30.20 MH/s   (best 1 s)
-average   29.69 MH/s   (239415296 hashes in 8.06 s)
+
+The independent cross-check uses the vendored Verus sources and the `sse2neon`
+submodule:
+
+```bash
+git submodule update --init third_party/verus/sse2neon
+make crosscheck
+python3 tools/audit-disas.py build/src/*.o
 ```
 
-Reproduced on a separate quiet run at **30.42 MH/s** peak / 29.59 average --
-0.2% from the above, which is what makes it a number rather than a sample.
-`tools/quiet-peak.sh` runs that protocol: one cold 8 s pass, machine state
-captured either side. It does not repeat the run, because each pass heats the
-part and makes the next peak worse.
+The four release gates are `make test`, `make crosscheck`, `make stratum-test`,
+and the disassembly audit. CI runs all four on Apple silicon before a tagged
+release is packaged.
 
-The 1 s figure tracking the 100 ms one is what says the peak is an operating
-point and not a scheduling burst caught by a short window. The timeline was
-flat across the full 8 s, so this is short of thermal throttling.
+## Repository layout
 
-**Peak is a property of the machine's state as much as the code, so it needs
-its conditions quoted with it.** That run was at load average 1.74 on a
-session-cold machine. The identical binary measured 28.6-29.1 MH/s later the
-same session at load 3.10 with accumulated heat -- a 5% spread with no code
-change. Comparisons between builds must be interleaved A/B pairs inside one
-short window; absolute peaks across sessions are not comparable.
+| Path | Contents |
+|---|---|
+| `include/vh22/` | ARM primitives, Haraka, and CLHash step bodies |
+| `src/` | Native hashing engine |
+| `net/` | PBaaS stratum client and JSON parser |
+| `ui/` | Terminal interface and ticker copy |
+| `ref/` | Slow, intrinsic-free correctness reference |
+| `tools/` | Tests, benchmarks, code-generation audit, and utilities |
+| `third_party/` | Sources used only by the independent cross-check |
 
-Correctness: 70255 differential checks against `ref/`, 2800 against the
-upstream build, 0 failures.
+More detail is available in:
 
-## What the notes got right
+- [`INSTALL.md`](INSTALL.md) — release verification, installation, and first run
+- [`docs/ENGINEERING.md`](docs/ENGINEERING.md) — architecture, protocol, and performance notes
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and release gates
+- [`CHANGELOG.md`](CHANGELOG.md) — release history
+- [`third_party/README.md`](third_party/README.md) — third-party source provenance
 
-**§7 — the branch problem is the whole game.** Measured against an
-identity-order control with everything else identical: case-bucketed dispatch
-is worth **+45% at 16 lanes and +69% at 64**. And without bucketing, 64 lanes
-is *slower* than 16 — exactly the predicted fight between interleaving and
-misprediction, since a pipeline flush discards in-flight work from every lane
-at once. Bucketing removes the conflict; only then does lane count scale.
+## License
 
-**§8 — don't prefetch.** Worth doubting, because the reasoning assumes an
-L1-resident key and at 64 lanes the working set is 565 KB. Measured anyway:
-removing all software prefetch is **+6.5%**, consistently, at every lane and
-thread count. Four `prfm` per lane per step is 128 extra memory-pipe operations
-per hash, and the addresses are known only one step ahead — too late to cover
-an L2 hit, early enough to compete with the loads that matter.
+The miner is licensed under GPL-3.0-or-later. See [`LICENSE`](LICENSE).
 
-**§4 — `SQRDMULH`.** One instruction where `sse2neon` spends five. The x86 wrap
-at `a = b = -32768` is real but is handled by re-verifying candidates on the
-exact path, so the mining loop carries no fixup at all.
-
-**§5 — fused AES chains, and the pairing rule.** Pinning `AESE`/`AESMC`
-adjacency with inline asm is +1.1% and takes the broken-pair count in the
-finalisation Haraka from 5 to 0. `tools/audit-disas.py` checks this
-mechanically, because it is correctness-neutral and so invisible to the
-harness.
-
-**§9 — the reduction shuffle indices are provably in [0,15]**, so `sse2neon`'s
-defensive `AND #0x8F` is dropped. The reference latches if that bound is ever
-violated; it never has been.
-
-## Where measurement disagreed with the notes
-
-**§2/§12 — "PMULL2: measurably worse; do not use".** Not on M5. Forcing
-`EXT`+`PMULL` via asm is *slower* than clang's `DUP`+`PMULL2` at every point
-from the latency-bound single stream (+0.7%) to the 64-lane wave (+2.6%). Both
-are two instructions; whatever the M1 penalty was, it is gone. The notes are
-explicit that their timings are M1-era and must be re-measured — this is one of
-the places that changed.
-
-**§6 — "N ≈ 12–14 before you're fighting for capacity".** That is the L1
-capacity limit, and it is not where the optimum is. Throughput rises
-monotonically to 64 lanes (565 KB, firmly in L2) and only turns over past 96.
-Low lane counts do not have enough independent work in flight to hide even L1
-latency plus the dependency chains, so L1 residency is the wrong thing to
-optimise for.
-
-**§8 — set-conflict padding.** Predicted to matter, reasoning from regions
-exactly 8192 B apart whose bases differ only in high address bits. But
-`VERUSKEYSIZE` is 8832 = 138 cache lines, not a power of two, so consecutive
-lane bases already walk through the sets. Measured residual is +0.75% at 64 B
-of padding, and everything from 384 B up is clearly worse.
-
-## Beyond the notes
-
-**Unpredictable *value* branches cost far more than unpredictable *loop counts*.**
-Making case 3's `dividend & 1` coin flip branchless is **+8.4%** — implying
-roughly 19 cycles per mispredict, in line with §7's estimate. But giving case
-6's 1..8 iteration loop a constant trip count of eight *lost* 3.8%: the surplus
-iterations cost more than the exit branch does, so variable-bound counted loops
-are being predicted well. That asymmetry says where to stop looking.
-
-**Case 6 restructured.** Only its mulhrs reads the accumulator, so the key XOR,
-the carry-less product and the 64/32 division all hoist off the chain. And
-`mulhrs(x, 0)` is exactly 0 in both the x86 and the SQRDMULH definition, which
-collapses its two branches into one straight-line step.
-
-**`CL()` of the four `pbuf_copy` vectors is loop-invariant per hash** and is
-precomputed, rather than recomputed inside cases 1, 2 and 3.
-
-**§7(b) partial predication was not pursued.** The notes suggest merging cases
-`0x00/0x04/0x08/0x1c` into one predicated body to cut the dispatch to five
-targets. That pays when the dispatch is an unpredictable indirect branch; with
-bucketing it is already predictable loop control, so predication would add
-`BSL` selects to every lane to save a handful of predictable dispatches per
-wave. The measured cost of case-6's speculative work points the same way.
-
-## GPU cost-sieve: measured dead on this engine
-
-The prior campaign's `codex/gpu-nonce-sieve` is a *work-cost* sieve, not a
-share-probability one: the GPU forecasts how expensive each nonce's walk will
-be, and the CPU completes only the cheapest fraction. Every nonce is an equally
-likely ticket, so completing more cheap ones per second is a real gain. It was
-found net-negative on an M2 Max because the 38-core GPU sustained ~40 Mcand/s
-of depth-4 forecasts against a ~76 Mcand/s CPU demand.
-
-`tools/sieve_oracle.cpp` measures the *ceiling* on this engine: the forecast is
-computed on the CPU and not counted against the clock, exactly as if an
-infinitely fast, perfectly accurate GPU had supplied it free. No real sieve can
-beat these numbers.
-
-| forecast depth | keep | per-hash gain | forecasts needed, 10 threads |
-|---|---|---|---|
-| 4 | 0.30 | +3 to +7% | 171 Mcand/s |
-| 8 | 0.30 | +4.6% | 173 Mcand/s |
-| 32 (perfect) | 0.30 | +8.5% | 179 Mcand/s |
-| 32 (perfect) | 0.10 | +18.1% | 588 Mcand/s |
-| 4 | 0.50 | +2.0% | 102 Mcand/s |
-
-Two things moved against it, and this engine caused both.
-
-**The leverage shrank.** A sieve's entire value is the variance of per-nonce
-cost. The cost model weights case 3 at 13 and case 6 at 10 per mod-branch --
-and those were largely *branch mispredict* costs. Case 3 is now branchless and
-case 6 is restructured, so the spread they created is gone. The model still
-predicts the cheapest 30% are 33% below mean cost at depth 4; the measured
-gain is a fifth of that.
-
-**The demand grew.** The engine is ~30% faster per core, so it consumes
-candidates that much faster.
-
-The supply side is not close. A depth-4 forecast is ~1/8 of a full hash, so
-171 Mcand/s is ~21 MH/s of full-hash-equivalent GPU work. The additive Metal
-worker measures the same GPU at ~1.2 MH/s. That is a shortfall of roughly 18x,
-and the M2 Max figures corroborate the model: 40 Mcand/s at depth 4 is ~5 MH/s
-equivalent against a ~3.1 MH/s measured additive worker there.
-
-A CPU-side sieve is worse still: at keep 0.30 each completed hash needs 3.33
-forecasts, so a depth-4 forecast costs 13.3 steps against a 32-step walk --
-about 42% overhead to buy 7%.
-
-The same GPU used *additively* already banks +4-5% on M5 with no orchestration,
-no starvation risk, and no CPU-side complexity. That is where the GPU belongs.
-
-## A correctness note worth keeping
-
-Upstream's case 4 opens with `const __m128i *rc = prand;`, which **shadows the
-global Haraka round-constant table** — its AES rounds use key material, exactly
-as case 5 does. This tree originally read the fixed constants in *both* the
-engine and the reference, so 70255 differential checks passed on a wrong
-implementation.
-
-A reference transcribed from the same misreading as the implementation agrees
-with it perfectly. `make crosscheck` exists because of this: it diffs against
-the build that is actually mining, which shares no authorship with either.
+Files under `third_party/` retain their upstream Apache-2.0 and MIT notices and
+are compiled only for `make crosscheck`; they are not linked into the miner.

@@ -386,7 +386,7 @@ static void test_key_restore()
 		rng.fill(buf, 64);
 		uint32_t touched[kSteps];
 		clhash_scalar<false>((v128 *)live, buf, touched);
-		check(!same(live, pristine, kKeyBytes), "walk actually mutated the key");
+		check(!same(live, pristine, kKeyBytes), "walk mutated the key");
 		restore_key(touched, (v128 *)live, (const v128 *)pristine);
 		check(same(live, pristine, kKeyBytes), "restore_key returns to pristine");
 	}
