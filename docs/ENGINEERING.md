@@ -1,10 +1,10 @@
-# Engineering notes
+# Architecture and performance
 
 Implementation details, protocol decisions, and measurements for the native
 Apple silicon engine are recorded below. User installation and operation are
 covered in [`../README.md`](../README.md) and [`../INSTALL.md`](../INSTALL.md).
 
-## Design
+## Engine architecture
 
 The engine is a C++ implementation of VerusHash 2.2 using ARM
 crypto intrinsics directly. It does not route x86 intrinsics through
@@ -22,7 +22,7 @@ The main components are:
 | `src/verushash.cpp` | Template setup, key expansion, and nonce driver |
 | `ref/` | Intrinsic-free reference implementation |
 
-### Case bucketing
+### Dispatch and interleaving
 
 Verus CLHash selects one of eight step bodies from data. Dispatching each lane
 independently creates an unpredictable branch that flushes unrelated work from
@@ -33,7 +33,7 @@ Against an identity-order control, case-bucketed dispatch measured 45% faster
 at 16 lanes and 69% faster at 64 lanes. Without bucketing, 64 lanes were slower
 than 16; with bucketing, throughput continued to improve through 64 lanes.
 
-### ARM instruction choices
+### Instruction selection
 
 - `SQRDMULH` replaces the longer translated sequence for the signed high-half
   multiply. The `-32768 * -32768` saturation difference is handled when a
@@ -44,26 +44,20 @@ than 16; with bucketing, throughput continued to improve through 64 lanes.
 - Reduction shuffle indices are proven to remain in `[0, 15]`, allowing the
   defensive mask used by the translated implementation to be removed.
 - On the tested M5, clang's `DUP` plus `PMULL2` sequence outperformed a forced
-  `EXT` plus `PMULL` sequence. Older M1-era guidance did not hold on this CPU.
-- Software prefetching reduced performance. At 64 lanes, four `prfm`
-  operations per lane and step competed with useful memory operations without
-  covering enough latency.
+  `EXT` plus `PMULL` sequence.
+- Software prefetching is disabled because its extra memory operations reduced
+  throughput at the tested lane counts.
 
-### Other measured changes
+### Hash-loop optimizations
 
 - Making case 3's value-dependent coin flip branchless improved throughput by
   8.4%.
-- Forcing case 6 to a constant eight iterations reduced throughput by 3.8%; the
-  extra work cost more than its variable loop-exit branch.
 - Case 6 hoists the key XOR, carry-less product, and division away from the
   accumulator dependency chain.
 - The CL transform of the four copied preimage vectors is computed once per
   hash rather than in cases 1, 2, and 3.
-- Set-conflict padding provided only a 0.75% residual gain at 64 bytes and
-  regressed at larger values. `VERUSKEYSIZE` already walks cache sets because
-  it is 8832 bytes rather than a power of two.
 
-## Stratum and share construction
+## Protocol implementation
 
 `net/` implements the Verus PBaaS stratum protocol and contains a small JSON
 parser for the required nested objects, arrays, strings, and numbers.
@@ -95,7 +89,7 @@ hash.
 - `client.reconnect` is honored.
 - Stopped or disconnected work is reported as stalled, not mining.
 
-## Correctness strategy
+## Verification
 
 Release verification uses four complementary gates:
 
@@ -163,23 +157,10 @@ A/B pairs within one short window.
 `tools/quiet-peak.sh` automates the cold eight-second protocol and records
 machine state before and after the run.
 
-## GPU cost-sieve result
+## GPU evaluation
 
-`tools/sieve_oracle.cpp` measures the ceiling of a work-cost sieve: it assumes
-an infinitely fast, perfectly accurate external forecast and does not charge
-forecast time to the CPU result.
-
-| Forecast depth | Keep | Per-hash gain | Forecast demand, 10 threads |
-|---:|---:|---:|---:|
-| 4 | 0.30 | +3% to +7% | 171 Mcand/s |
-| 8 | 0.30 | +4.6% | 173 Mcand/s |
-| 32, perfect | 0.30 | +8.5% | 179 Mcand/s |
-| 32, perfect | 0.10 | +18.1% | 588 Mcand/s |
-| 4 | 0.50 | +2.0% | 102 Mcand/s |
-
-The native CPU optimizations reduced the cost variance that made a sieve
-valuable while increasing candidate demand. A depth-4 forecast needs roughly
-one eighth of a full hash, so 171 Mcand/s represents about 21 MH/s of
-full-hash-equivalent GPU work. The measured additive Metal worker reached
-about 1.2 MH/s on the same GPU. An additive worker therefore remains more
-useful than a cost sieve for this engine.
+`tools/sieve_oracle.cpp` measures the upper bound of filtering nonces by
+predicted CPU cost. At ten threads, the most practical configuration improved
+per-hash cost by 3–7% but required 171 million forecasts per second. Measured
+GPU throughput was below that requirement, so the shipping miner remains
+CPU-only.
