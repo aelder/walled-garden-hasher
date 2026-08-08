@@ -11,6 +11,7 @@
 
 #include <mach/mach.h>
 #include <mach/mach_host.h>
+#include <mach-o/dyld.h>
 #include <mach/processor_info.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
@@ -19,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -441,6 +443,24 @@ static const char *kNewsFallback =
 	"Walled Garden Hasher released, bringing Verus mining to Apple Silicon — "
 	"at least one person reportedly extremely excited.";
 
+static std::string executable_dir()
+{
+	uint32_t size = 0;
+	_NSGetExecutablePath(nullptr, &size);
+	if (size == 0)
+		return {};
+
+	std::vector<char> path(size);
+	if (_NSGetExecutablePath(path.data(), &size) != 0)
+		return {};
+
+	char resolved[PATH_MAX];
+	const char *absolute = realpath(path.data(), resolved) ? resolved : path.data();
+	std::string dir(absolute);
+	const size_t slash = dir.find_last_of('/');
+	return slash == std::string::npos ? std::string() : dir.substr(0, slash);
+}
+
 // Headlines are the bullets under the `## live` heading. Scoping them to a
 // section rather than taking every bullet in the file is what lets the file
 // carry its own house style notes and a graveyard of spiked drafts -- both of
@@ -452,6 +472,8 @@ static std::vector<std::string> load_news()
 	if (const char *env = getenv("VH22_NEWS"))
 		paths.push_back(env);
 	paths.push_back(config_dir() + "/news.md");
+	if (const std::string dir = executable_dir(); !dir.empty())
+		paths.push_back(dir + "/news.md");
 	paths.push_back("ui/news.md");   // running from vh22/, as `make top` does
 	paths.push_back("news.md");
 
@@ -2552,7 +2574,7 @@ struct App {
 };
 
 // Bumped by hand, and the release tag is expected to match it.
-static const char *kVersion = "1.1.1";
+static const char *kVersion = "1.1.2";
 
 static void usage(FILE *f)
 {

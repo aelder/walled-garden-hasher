@@ -1,7 +1,7 @@
 # The Walled Garden Hasher
 
 [![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.1.1-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.1)
+[![Release](https://img.shields.io/badge/release-v1.1.2-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.2)
 [![Homebrew](https://img.shields.io/badge/Homebrew-aelder%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aelder/homebrew-tap)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](DISCLAIMER.md)
@@ -27,13 +27,12 @@ architecture, and correctness notes.
 ## Install with Homebrew
 
 ```bash
-brew install aelder/tap/vh22-top
-vh22-top
+brew install --cask aelder/tap/vh22-top && vh22-top
 ```
 
-The formula builds the miner for the current Apple silicon Mac and installs the
-full ticker data alongside the executable. Upgrade later with
-`brew upgrade vh22-top`.
+The cask installs the prebuilt Apple silicon release and its ticker data. It
+does not compile locally or require Xcode Command Line Tools. Upgrade later
+with `brew upgrade --cask vh22-top`.
 
 ## Requirements
 
