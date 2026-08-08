@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 RC = [
  (0x0684704c,0xe620c00a,0xb2c5fef0,0x75817b9d),(0x8b66b4e1,0x88f3a06b,0x640f6ba4,0x2f08f717),
  (0x3402de2d,0x53f28498,0xcf029d60,0x9f029114),(0x0ed6eae6,0x2e7b4f08,0xbbf3bcaf,0xfd5b4f79),
@@ -54,5 +57,6 @@ for g in range(5):
 out.append("};")
 out.append("")
 out.append("} // namespace vh22")
-open("/Users/brandon/verusminer/vh22/include/vh22/haraka_tables.h","w").write("\n".join(out) + "\n")
+output_path = Path(__file__).resolve().parents[1] / "include" / "vh22" / "haraka_tables.h"
+output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 print("wrote", len(out), "lines")
