@@ -3,6 +3,17 @@
 Notable user-visible changes are recorded here. The project follows semantic
 versioning for release tags.
 
+## 1.1.2 — 2026-08-07
+
+### Changed
+
+- Homebrew now installs a prebuilt binary cask, avoiding local compiler and
+  Xcode Command Line Tools requirements.
+- The ticker data is discovered beside the executable, allowing packaged
+  installs to use the full ticker without a launcher wrapper.
+- The documented install command launches only after Homebrew succeeds, which
+  avoids a misleading `command not found` message after an interrupted install.
+
 ## 1.1.1 — 2026-08-07
 
 ### Changed

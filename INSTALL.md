@@ -12,20 +12,18 @@
 ## Install with Homebrew
 
 ```bash
-brew install aelder/tap/vh22-top
-vh22-top
+brew install --cask aelder/tap/vh22-top && vh22-top
 ```
 
-The formula supports Apple silicon only. It builds the executable from the
-tagged source release and installs the bundled ticker data in Homebrew's shared
-data directory. The launcher sets `VH22_NEWS` to that installed copy, so the
-full ticker remains available regardless of the current directory.
+The cask supports Apple silicon and macOS 15 or later. It installs the prebuilt
+release and bundled ticker data without compiling locally, so Xcode Command
+Line Tools are not required.
 
 Upgrade or uninstall it with:
 
 ```bash
-brew upgrade vh22-top
-brew uninstall vh22-top
+brew upgrade --cask vh22-top
+brew uninstall --cask vh22-top
 ```
 
 ## Install a release build manually
@@ -40,10 +38,10 @@ The binary is currently **unsigned and not notarized**. The steps below compare
 the archive with its published checksum before removing the quarantine marker
 that macOS adds to browser downloads.
 
-The example below uses `v1.1.1`; replace it with the version you downloaded.
+The example below uses `v1.1.2`; replace it with the version you downloaded.
 
 ```bash
-RELEASE=v1.1.1
+RELEASE=v1.1.2
 ARCHIVE="walled-garden-hasher-${RELEASE}-macos-arm64.tar.gz"
 
 shasum -a 256 -c "${ARCHIVE}.sha256"
@@ -129,6 +127,10 @@ Run `./vh22-top --help` for the built-in summary.
 
 ## Troubleshooting
 
+- **Homebrew stops before launching `vh22-top`:** the install and launch are
+  joined with `&&`, so a failed install does not produce a second, misleading
+  `command not found` error. Retry the Homebrew command above; the current cask
+  installs a prebuilt binary and does not require Command Line Tools.
 - **macOS says the developer cannot be verified:** verify the SHA-256 checksum,
   then remove quarantine from `vh22-top` as shown above.
 - **The program says it needs an interactive terminal:** run it directly from
