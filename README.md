@@ -1,6 +1,9 @@
 # The Walled Garden Hasher
 
-[![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
+[![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v1.1.0-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.0)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20silicon-black?logo=apple)
 
 A CPU-only VerusHash 2.2 miner built specifically for Apple silicon. It ships as
 one dependency-free binary with a native ARM engine, a Verus PBaaS stratum
