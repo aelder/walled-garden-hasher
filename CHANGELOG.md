@@ -3,6 +3,13 @@
 Notable user-visible changes are recorded here. The project follows semantic
 versioning for release tags.
 
+## 1.1.1 — 2026-08-07
+
+### Changed
+
+- Added prominent beta, no-warranty, heat, and sustained-load notices to the
+  documentation and future release archives.
+
 ## 1.1.0 — 2026-08-07
 
 ### Added

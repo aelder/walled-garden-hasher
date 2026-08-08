@@ -92,7 +92,7 @@ jobs:
           cp build/vh22-top "dist/$name/"
           cp ui/news.md "dist/$name/"
           cp INSTALL.md "dist/$name/"
-          cp README.md CHANGELOG.md LICENSE "dist/$name/"
+          cp README.md CHANGELOG.md DISCLAIMER.md LICENSE "dist/$name/"
           cd dist
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"

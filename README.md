@@ -1,8 +1,9 @@
 # The Walled Garden Hasher
 
 [![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.1.0-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.0)
+[![Release](https://img.shields.io/badge/release-v1.1.1-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.1)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![Status](https://img.shields.io/badge/status-beta-orange)](DISCLAIMER.md)
 ![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20silicon-black?logo=apple)
 
 A CPU-only VerusHash 2.2 miner built specifically for Apple silicon. It ships as
@@ -15,9 +16,12 @@ on one thread and 29.28 MH/s sustained on ten threads. See
 [`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the benchmark conditions,
 architecture, and correctness notes.
 
-> [!CAUTION]
-> Mining keeps the selected CPU cores busy, increasing heat and power draw.
-> Battery runtime will decrease during sustained mining.
+> [!WARNING]
+> **Beta software — use at your own risk.** This is free software under
+> GPL-3.0-or-later and is provided as is, without warranty. Mining deliberately
+> sustains high CPU load, increasing heat, power use, battery drain, and
+> hardware wear. Read the full [`DISCLAIMER.md`](DISCLAIMER.md) before running
+> it.
 
 ## Requirements
 
@@ -135,11 +139,14 @@ More detail is available in:
 - [`docs/ENGINEERING.md`](docs/ENGINEERING.md) — architecture, protocol, and performance notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and release gates
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
+- [`DISCLAIMER.md`](DISCLAIMER.md) — beta status, warranty, hardware, and mining
+  risks
 - [`third_party/README.md`](third_party/README.md) — third-party source provenance
 
 ## License
 
 The miner is licensed under GPL-3.0-or-later. See [`LICENSE`](LICENSE).
+It is provided without warranty; see [`DISCLAIMER.md`](DISCLAIMER.md).
 
 Files under `third_party/` retain their upstream Apache-2.0 and MIT notices and
 are compiled only for `make crosscheck`; they are not linked into the miner.
