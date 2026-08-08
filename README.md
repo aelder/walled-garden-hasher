@@ -1,7 +1,7 @@
 # The Walled Garden Hasher
 
 [![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.1.0-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.0)
+[![Release](https://img.shields.io/badge/release-v1.1.1-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.1)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](DISCLAIMER.md)
 ![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20silicon-black?logo=apple)

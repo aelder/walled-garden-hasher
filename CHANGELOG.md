@@ -3,7 +3,7 @@
 Notable user-visible changes are recorded here. The project follows semantic
 versioning for release tags.
 
-## Unreleased
+## 1.1.1 — 2026-08-07
 
 ### Changed
 

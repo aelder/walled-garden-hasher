@@ -40,10 +40,10 @@ The binary is currently **unsigned and not notarized**. The steps below compare
 the archive with its published checksum before removing the quarantine marker
 that macOS adds to browser downloads.
 
-The example below uses `v1.1.0`; replace it with the version you downloaded.
+The example below uses `v1.1.1`; replace it with the version you downloaded.
 
 ```bash
-RELEASE=v1.1.0
+RELEASE=v1.1.1
 ARCHIVE="walled-garden-hasher-${RELEASE}-macos-arm64.tar.gz"
 
 shasum -a 256 -c "${ARCHIVE}.sha256"
