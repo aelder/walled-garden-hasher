@@ -3,6 +3,12 @@
 `vh22-top` requires an Apple silicon Mac and an interactive terminal at least
 60 columns by 19 rows. Truecolor is recommended.
 
+> [!WARNING]
+> `vh22-top` is beta, free software provided without warranty. Mining places the
+> CPU under sustained load and can increase heat, power use, battery drain, and
+> hardware wear. Rewards and profitability are not guaranteed. Read
+> [`DISCLAIMER.md`](DISCLAIMER.md) before installation or use.
+
 ## Install with Homebrew
 
 ```bash

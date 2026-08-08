@@ -3,6 +3,13 @@
 Notable user-visible changes are recorded here. The project follows semantic
 versioning for release tags.
 
+## Unreleased
+
+### Changed
+
+- Added prominent beta, no-warranty, hardware-load, and mining-risk notices to
+  the documentation and future release archives.
+
 ## 1.1.0 — 2026-08-07
 
 ### Added
