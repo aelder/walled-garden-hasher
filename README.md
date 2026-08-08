@@ -21,6 +21,19 @@ The cask installs the prebuilt Apple silicon release and its ticker data. It
 does not compile locally or require Xcode Command Line Tools. Upgrade later
 with `brew upgrade --cask vh22-top`.
 
+## Support the project
+
+`vh22-top` has no developer fee and does not divert mining rewards. You keep
+100% of what the pool pays to your configured address.
+
+Support continued development and releases with a VRSC tip:
+
+```text
+RCEMKf5dkPBujXBRwnjKiew7JQwXJd9aDg
+```
+
+Tips are entirely optional; every feature remains free.
+
 > [!WARNING]
 > **Beta software — use at your own risk.** This is free software under
 > GPL-3.0-or-later and is provided as is, without warranty. Mining deliberately
