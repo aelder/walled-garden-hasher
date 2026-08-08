@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aelder/walled-garden-hasher/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v1.1.1-blue)](https://github.com/aelder/walled-garden-hasher/releases/tag/v1.1.1)
+[![Homebrew](https://img.shields.io/badge/Homebrew-aelder%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aelder/homebrew-tap)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](DISCLAIMER.md)
 ![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20silicon-black?logo=apple)
@@ -23,17 +24,7 @@ architecture, and correctness notes.
 > hardware wear. Read the full [`DISCLAIMER.md`](DISCLAIMER.md) before running
 > it.
 
-## Requirements
-
-- An Apple silicon Mac
-- A terminal at least 60 columns by 19 rows; truecolor is recommended
-- Xcode Command Line Tools when building from source
-
-There are no third-party runtime dependencies. Intel Macs are not supported.
-
-## Quick start
-
-### Install with Homebrew
+## Install with Homebrew
 
 ```bash
 brew install aelder/tap/vh22-top
@@ -43,6 +34,16 @@ vh22-top
 The formula builds the miner for the current Apple silicon Mac and installs the
 full ticker data alongside the executable. Upgrade later with
 `brew upgrade vh22-top`.
+
+## Requirements
+
+- An Apple silicon Mac
+- A terminal at least 60 columns by 19 rows; truecolor is recommended
+- Xcode Command Line Tools when building from source
+
+There are no third-party runtime dependencies. Intel Macs are not supported.
+
+## Other installation methods
 
 ### Download a release manually
 
