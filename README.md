@@ -20,8 +20,8 @@ architecture, and correctness notes.
 > **Beta software — use at your own risk.** This is free software under
 > GPL-3.0-or-later and is provided as is, without warranty. Mining deliberately
 > sustains high CPU load, increasing heat, power use, battery drain, and
-> hardware wear. Rewards and profitability are not guaranteed. Read the full
-> [`DISCLAIMER.md`](DISCLAIMER.md) before running it.
+> hardware wear. Read the full [`DISCLAIMER.md`](DISCLAIMER.md) before running
+> it.
 
 ## Requirements
 

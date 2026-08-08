@@ -6,8 +6,8 @@
 > [!WARNING]
 > `vh22-top` is beta, free software provided without warranty. Mining places the
 > CPU under sustained load and can increase heat, power use, battery drain, and
-> hardware wear. Rewards and profitability are not guaranteed. Read
-> [`DISCLAIMER.md`](DISCLAIMER.md) before installation or use.
+> hardware wear. Read [`DISCLAIMER.md`](DISCLAIMER.md) before installation or
+> use.
 
 ## Install with Homebrew
 

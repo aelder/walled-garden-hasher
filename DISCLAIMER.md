@@ -3,8 +3,7 @@
 ## Beta software
 
 `vh22-top` is beta software. It may contain defects, crash, report incorrect
-statistics, submit rejected shares, lose mining time, or stop working when a
-pool or protocol changes. Do not rely on it for critical operations.
+statistics, or stop unexpectedly. Do not rely on it for critical operations.
 
 ## Free software and no warranty
 
@@ -33,21 +32,3 @@ or the power adapter appear abnormal.
 
 Apple's current guidance: [Keep your Mac laptop within acceptable operating
 temperatures](https://support.apple.com/102336).
-
-## Mining, network, and financial risks
-
-- Mining rewards and profitability are not guaranteed. Difficulty, asset
-  prices, pool terms, fees, downtime, rejected or stale shares, and electricity
-  costs can make mining unprofitable.
-- Pool services are operated by third parties. Their availability, security,
-  accounting, privacy practices, and payouts are outside this project's
-  control.
-- An incorrect payout address or pool configuration can prevent or misdirect
-  payouts. Verify both before starting.
-- Network interruptions, software defects, or protocol changes can cause lost
-  mining time or shares without compensation.
-
-The application does not create or store a wallet, private key, or seed phrase.
-You remain responsible for wallet security, pool selection, system monitoring,
-backups, electricity costs, and deciding whether mining is appropriate for the
-Mac and location where it is used.
