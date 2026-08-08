@@ -3,11 +3,13 @@
 Notable user-visible changes are recorded here. The project follows semantic
 versioning for release tags.
 
-## Unreleased
+## 1.1.0 — 2026-08-07
 
 ### Added
 
 - One-screen `?` help for all dashboard controls.
+- Homebrew installation through `aelder/tap/vh22-top`, including the full
+  ticker data.
 - Optional terminal animation support through `VH22_FILM` or
   `~/.config/vh22/film`.
 - User-selectable 100 ms, 300 ms, and frozen graph refresh modes.
