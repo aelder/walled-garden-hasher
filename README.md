@@ -26,7 +26,18 @@ There are no third-party runtime dependencies. Intel Macs are not supported.
 
 ## Quick start
 
-### Download a release
+### Install with Homebrew
+
+```bash
+brew install aelder/tap/vh22-top
+vh22-top
+```
+
+The formula builds the miner for the current Apple silicon Mac and installs the
+full ticker data alongside the executable. Upgrade later with
+`brew upgrade vh22-top`.
+
+### Download a release manually
 
 Download the macOS ARM64 archive and matching SHA-256 file from
 [GitHub Releases](https://github.com/aelder/walled-garden-hasher/releases), then
@@ -116,7 +127,8 @@ release is packaged.
 
 More detail is available in:
 
-- [`INSTALL.md`](INSTALL.md) — release verification, installation, and first run
+- [`INSTALL.md`](INSTALL.md) — Homebrew, manual release, source, and first-run
+  instructions
 - [`docs/ENGINEERING.md`](docs/ENGINEERING.md) — architecture, protocol, and performance notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and release gates
 - [`CHANGELOG.md`](CHANGELOG.md) — release history

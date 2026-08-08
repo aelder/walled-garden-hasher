@@ -3,7 +3,26 @@
 `vh22-top` requires an Apple silicon Mac and an interactive terminal at least
 60 columns by 19 rows. Truecolor is recommended.
 
-## Install a release build
+## Install with Homebrew
+
+```bash
+brew install aelder/tap/vh22-top
+vh22-top
+```
+
+The formula supports Apple silicon only. It builds the executable from the
+tagged source release and installs the bundled ticker data in Homebrew's shared
+data directory. The launcher sets `VH22_NEWS` to that installed copy, so the
+full ticker remains available regardless of the current directory.
+
+Upgrade or uninstall it with:
+
+```bash
+brew upgrade vh22-top
+brew uninstall vh22-top
+```
+
+## Install a release build manually
 
 Download these two files for the same version from
 [GitHub Releases](https://github.com/aelder/walled-garden-hasher/releases):
@@ -15,10 +34,10 @@ The binary is currently **unsigned and not notarized**. The steps below compare
 the archive with its published checksum before removing the quarantine marker
 that macOS adds to browser downloads.
 
-The example below uses `v1.0.0`; replace it with the version you downloaded.
+The example below uses `v1.1.0`; replace it with the version you downloaded.
 
 ```bash
-RELEASE=v1.0.0
+RELEASE=v1.1.0
 ARCHIVE="walled-garden-hasher-${RELEASE}-macos-arm64.tar.gz"
 
 shasum -a 256 -c "${ARCHIVE}.sha256"
