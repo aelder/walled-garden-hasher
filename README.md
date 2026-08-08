@@ -11,19 +11,6 @@ A CPU-only VerusHash 2.2 miner built specifically for Apple silicon. It ships as
 one dependency-free binary with a native ARM engine, a Verus PBaaS stratum
 client, and the `vh22-top` terminal interface.
 
-The hashing engine uses ARM crypto intrinsics directly instead of translating
-x86 intrinsics through `sse2neon`. On an M5 MacBook Air it measured 4.97 MH/s
-on one thread and 29.28 MH/s sustained on ten threads. See
-[`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the benchmark conditions,
-architecture, and correctness notes.
-
-> [!WARNING]
-> **Beta software — use at your own risk.** This is free software under
-> GPL-3.0-or-later and is provided as is, without warranty. Mining deliberately
-> sustains high CPU load, increasing heat, power use, battery drain, and
-> hardware wear. Read the full [`DISCLAIMER.md`](DISCLAIMER.md) before running
-> it.
-
 ## Install with Homebrew
 
 ```bash
@@ -33,6 +20,19 @@ brew install --cask aelder/tap/vh22-top && vh22-top
 The cask installs the prebuilt Apple silicon release and its ticker data. It
 does not compile locally or require Xcode Command Line Tools. Upgrade later
 with `brew upgrade --cask vh22-top`.
+
+> [!WARNING]
+> **Beta software — use at your own risk.** This is free software under
+> GPL-3.0-or-later and is provided as is, without warranty. Mining deliberately
+> sustains high CPU load, increasing heat, power use, battery drain, and
+> hardware wear. Read the full [`DISCLAIMER.md`](DISCLAIMER.md) before running
+> it.
+
+The hashing engine uses ARM crypto intrinsics directly instead of translating
+x86 intrinsics through `sse2neon`. On an M5 MacBook Air it measured 4.97 MH/s
+on one thread and 29.28 MH/s sustained on ten threads. See
+[`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the benchmark conditions,
+architecture, and correctness notes.
 
 ## Requirements
 
